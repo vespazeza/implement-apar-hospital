@@ -88,7 +88,7 @@ export default function Layout() {
             <div>
               <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, lineHeight: 1.3 }}>AP/AR Tracker</div>
               <div style={{ color: '#94a3b8', fontSize: 11 }}>Implementation</div>
-              <div style={{ color: '#475569', fontSize: 10, marginTop: 2 }}>version : V1</div>
+              <div style={{ color: '#475569', fontSize: 10, marginTop: 2 }}>version : V2</div>
             </div>
           )}
         </div>
