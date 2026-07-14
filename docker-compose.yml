@@ -24,7 +24,7 @@ services:
 
   # ── Backend (Express.js) ────────────────────────────────────────────────────
   backend:
-    image: hub.hosxp.net/bms/apar-backend:latest
+    image: hub.hosxp.net/bms/apar-backend:v2
     container_name: apar_backend
     restart: always
     environment:
@@ -41,7 +41,7 @@ services:
 
   # ── Frontend (React + Nginx) ────────────────────────────────────────────────
   frontend:
-    image: hub.hosxp.net/bms/apar-frontend:latest
+    image: hub.hosxp.net/bms/apar-frontend:v2
     container_name: apar_frontend
     restart: always
     ports:
