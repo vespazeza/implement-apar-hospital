@@ -478,8 +478,7 @@ export default function DocTracking() {
                     const pendCnt = sum?.pendingCount ?? 0
                     const holCnt  = sum?.holidayCount ?? 0
                     const total   = sum?.total ?? 0
-                    const effective = total - holCnt
-                    const pct = effective > 0 ? Math.round((sentCnt / effective) * 100) : 0
+                    const pct = total > 0 ? Math.round(((total - pendCnt) / total) * 100) : 0
                     return (
                       <tr key={p.id}
                         style={{ borderBottom:'1px solid #f1f5f9', background: idx%2===0?'#fff':'#fafafa', transition:'background 0.1s' }}
@@ -549,8 +548,7 @@ export default function DocTracking() {
         const pendCnt = sum?.pendingCount ?? 0
         const holCnt  = sum?.holidayCount ?? 0
         const total   = sum?.total ?? 0
-        const effective = total - holCnt
-        const pct = effective > 0 ? Math.round((sentCnt / effective) * 100) : 0
+        const pct = total > 0 ? Math.round(((total - pendCnt) / total) * 100) : 0
 
         return (
           <div>
