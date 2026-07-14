@@ -129,6 +129,7 @@ export default function SystemSummary() {
       hospitalId: lastOpt?.hospitalId || '',
       reportDate: todayStr(),
       reportedBy: getCurrentUserName(),
+      receivedBy: getCurrentUserName(),
     })
   }
 
@@ -331,7 +332,12 @@ export default function SystemSummary() {
                     if (me && !opts.some(o => o.value === me)) opts.unshift({ value: me, label: `${me} (ฉัน)` })
                     return opts
                   })(), nullable: true },
-                  { label: 'ผู้รับปัญหา', key: 'receivedBy', type: 'select', options: teamMembers.map(m => ({ value: m.name, label: m.name + (m.position ? ` (${m.position})` : '') })), nullable: true },
+                  { label: 'ผู้รับปัญหา', key: 'receivedBy', type: 'select', options: (() => {
+                    const opts = teamMembers.map(m => ({ value: m.name, label: m.name + (m.position ? ` (${m.position})` : '') }))
+                    const me = getCurrentUserName()
+                    if (me && !opts.some(o => o.value === me)) opts.unshift({ value: me, label: `${me} (ฉัน)` })
+                    return opts
+                  })(), nullable: true },
                   { label: 'ผู้แก้ไข', key: 'resolvedBy', type: 'select', options: teamMembers.map(m => ({ value: m.name, label: m.name + (m.position ? ` (${m.position})` : '') })), nullable: true },
                   { label: 'ระบบงาน *', key: 'systemName', type: 'select', options: systemNames.map(s => ({ value: s, label: s })), nullable: true },
                   { label: 'ประเภทปัญหา *', key: 'category', type: 'select', options: issueTypes.map(t => ({ value: t, label: t })), nullable: true },
