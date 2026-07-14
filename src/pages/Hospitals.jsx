@@ -18,7 +18,7 @@ const EMPTY_FORM = {
   affiliation: '', address: '',
   coordinator: '', coordinatorPhone: '', coordinatorEmail: '',
   itContact: '', itPhone: '',
-  bedCount: '', note: '',
+  bedCount: '', userCount: '', note: '',
 }
 
 const L = { display: 'block', fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 5 }
@@ -234,6 +234,11 @@ export default function Hospitals() {
                             {Number(hosp.bedCount).toLocaleString()} เตียง
                           </span>
                         )}
+                        {hosp.userCount && (
+                          <span style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>
+                            · {Number(hosp.userCount).toLocaleString()} user
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td style={{ padding: '13px 14px', fontSize: 13, color: '#374151' }}>{hosp.coordinator || '-'}</td>
@@ -324,6 +329,10 @@ export default function Hospitals() {
                       <label style={L}>จำนวนเตียง</label>
                       <input type="number" value={form.bedCount} onChange={set('bedCount')} placeholder="0" min={0} style={I} />
                     </div>
+                    <div>
+                      <label style={L}>จำนวน User</label>
+                      <input type="number" value={form.userCount} onChange={set('userCount')} placeholder="0" min={0} style={I} />
+                    </div>
                   </div>
                 </Section>
 
@@ -401,6 +410,7 @@ export default function Hospitals() {
                   { label: 'ภาค', value: viewHosp.region || '-' },
                   { label: 'สังกัด', value: viewHosp.affiliation || '-', col: 2 },
                   { label: 'จำนวนเตียง', value: viewHosp.bedCount ? viewHosp.bedCount + ' เตียง' : '-' },
+                  { label: 'จำนวน User', value: viewHosp.userCount ? Number(viewHosp.userCount).toLocaleString() + ' คน' : '-' },
                 ].map(f => (
                   <div key={f.label} style={{ background: '#f8fafc', borderRadius: 8, padding: '10px 14px', gridColumn: f.col ? `span ${f.col}` : 'span 1' }}>
                     <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 2 }}>{f.label}</div>
