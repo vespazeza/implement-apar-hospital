@@ -72,7 +72,7 @@ app.get('/api/hospitals', async (req, res) => {
     res.json(r.map(h => ({
       id: h.id, name: h.name, code: h.code || '', type: h.type || '',
       province: h.province || '', region: h.region || '', affiliation: h.affiliation || '',
-      address: h.address || '', bedCount: h.bed_count || 0, userCount: h.user_count || 0,
+      address: h.address || '', bedCount: h.bed_count || 0, userCount: h.user_count || 0, userCountAr: h.user_count_ar || 0,
       coordinator: h.coordinator || '', coordinatorPhone: h.coordinator_phone || '',
       coordinatorEmail: h.coordinator_email || '',
       itContact: h.it_contact || '', itPhone: h.it_phone || '', note: h.note || '',
@@ -85,10 +85,10 @@ app.post('/api/hospitals', async (req, res) => {
     const d = req.body
     const [r] = await pool.query(
       `INSERT INTO hospitals (name,code,type,province,region,affiliation,address,
-        bed_count,user_count,coordinator,coordinator_phone,coordinator_email,it_contact,it_phone,note)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        bed_count,user_count,user_count_ar,coordinator,coordinator_phone,coordinator_email,it_contact,it_phone,note)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [d.name,d.code,d.type,d.province,d.region,d.affiliation,d.address,
-       nn(d.bedCount),nn(d.userCount),d.coordinator,d.coordinatorPhone,d.coordinatorEmail,
+       nn(d.bedCount),nn(d.userCount),nn(d.userCountAr),d.coordinator,d.coordinatorPhone,d.coordinatorEmail,
        d.itContact,d.itPhone,d.note])
     res.json({ id: r.insertId, ...d })
   } catch (e) { res.status(500).json({ error: e.message }) }
@@ -99,10 +99,10 @@ app.put('/api/hospitals/:id', async (req, res) => {
     const d = req.body
     await pool.query(
       `UPDATE hospitals SET name=?,code=?,type=?,province=?,region=?,affiliation=?,address=?,
-        bed_count=?,user_count=?,coordinator=?,coordinator_phone=?,coordinator_email=?,
+        bed_count=?,user_count=?,user_count_ar=?,coordinator=?,coordinator_phone=?,coordinator_email=?,
         it_contact=?,it_phone=?,note=? WHERE id=?`,
       [d.name,d.code,d.type,d.province,d.region,d.affiliation,d.address,
-       nn(d.bedCount),nn(d.userCount),d.coordinator,d.coordinatorPhone,d.coordinatorEmail,
+       nn(d.bedCount),nn(d.userCount),nn(d.userCountAr),d.coordinator,d.coordinatorPhone,d.coordinatorEmail,
        d.itContact,d.itPhone,d.note, req.params.id])
     res.json({ id: Number(req.params.id), ...d })
   } catch (e) { res.status(500).json({ error: e.message }) }
@@ -905,6 +905,10 @@ async function runMigrations() {
     {
       table: 'hospitals', column: 'user_count',
       sql: `ALTER TABLE hospitals ADD COLUMN user_count INT NULL AFTER bed_count`,
+    },
+    {
+      table: 'hospitals', column: 'user_count_ar',
+      sql: `ALTER TABLE hospitals ADD COLUMN user_count_ar INT NULL AFTER user_count`,
     },
   ]
 

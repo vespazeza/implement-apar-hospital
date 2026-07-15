@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useApp } from '../context/AppContext'
+import * as XLSX from 'xlsx'
 
 const API = import.meta.env.VITE_API_URL || ''
 
@@ -18,7 +19,7 @@ const EMPTY_FORM = {
   affiliation: '', address: '',
   coordinator: '', coordinatorPhone: '', coordinatorEmail: '',
   itContact: '', itPhone: '',
-  bedCount: '', userCount: '', note: '',
+  bedCount: '', userCount: '', userCountAr: '', note: '',
 }
 
 const L = { display: 'block', fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 5 }
@@ -146,6 +147,36 @@ export default function Hospitals() {
 
   const typeCounts = HOSPITAL_TYPES.reduce((acc, t) => ({ ...acc, [t.value]: hospitals.filter(h => h.type === t.value).length }), {})
 
+  const exportToExcel = () => {
+    const headers = ['ลำดับ','รหัส','ชื่อโรงพยาบาล','สังกัด','จังหวัด','ภาค','ประเภท','จำนวนเตียง','จำนวน user เจ้าหนี้','จำนวน user ลูกหนี้/รายได้','ผู้ประสานงาน','เบอร์โทรผู้ประสานงาน','อีเมลผู้ประสานงาน','เจ้าหน้าที่ IT','เบอร์โทร IT','ที่อยู่','หมายเหตุ']
+    const rows = filtered.map((h, idx) => [
+      idx + 1,
+      h.code || '',
+      h.name || '',
+      h.affiliation || '',
+      h.province || '',
+      h.region || '',
+      HOSPITAL_TYPES.find(t => t.value === h.type)?.label || h.type || '',
+      h.bedCount || 0,
+      h.userCount || 0,
+      h.userCountAr || 0,
+      h.coordinator || '',
+      h.coordinatorPhone || '',
+      h.coordinatorEmail || '',
+      h.itContact || '',
+      h.itPhone || '',
+      h.address || '',
+      h.note || '',
+    ])
+    const wsData = [['ทะเบียนข้อมูลโรงพยาบาล AP/AR'], [], headers, ...rows]
+    const ws = XLSX.utils.aoa_to_sheet(wsData)
+    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }]
+    ws['!cols'] = [{ wch: 6 }, { wch: 12 }, { wch: 30 }, { wch: 26 }, { wch: 14 }, { wch: 20 }, { wch: 20 }, { wch: 12 }, { wch: 16 }, { wch: 18 }, { wch: 20 }, { wch: 16 }, { wch: 24 }, { wch: 20 }, { wch: 16 }, { wch: 36 }, { wch: 30 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'ข้อมูลโรงพยาบาล')
+    XLSX.writeFile(wb, `hospitals_${new Date().toISOString().slice(0,10)}.xlsx`)
+  }
+
   return (
     <div>
       {/* Header */}
@@ -190,6 +221,10 @@ export default function Hospitals() {
         {(search || filterType || filterRegion) && (
           <button onClick={() => { setSearch(''); setFilterType(''); setFilterRegion('') }} style={{ padding: '8px 14px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 13, cursor: 'pointer', color: '#64748b' }}>✕ ล้าง</button>
         )}
+        <button onClick={exportToExcel} disabled={filtered.length === 0} style={{
+          padding: '9px 18px', background: filtered.length === 0 ? '#e2e8f0' : '#16a34a', color: filtered.length === 0 ? '#94a3b8' : '#fff',
+          border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: filtered.length === 0 ? 'default' : 'pointer', whiteSpace: 'nowrap',
+        }}>📥 Export Excel</button>
         <span style={{ marginLeft: 'auto', fontSize: 13, color: '#94a3b8' }}>แสดง {filtered.length} แห่ง</span>
       </div>
 
@@ -206,7 +241,7 @@ export default function Hospitals() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: '#1e3a5f' }}>
-                  {['#', 'รหัส', 'ชื่อโรงพยาบาล', 'จังหวัด / ภาค', 'ประเภท', 'ผู้ประสานงาน', 'เบอร์โทร', 'อีเมล', 'จัดการ'].map(h => (
+                  {['#', 'รหัส', 'ชื่อโรงพยาบาล', 'จังหวัด / ภาค', 'ประเภท', 'User เจ้าหนี้', 'User ลูกหนี้/รายได้', 'ผู้ประสานงาน', 'เบอร์โทร', 'อีเมล', 'จัดการ'].map(h => (
                     <th key={h} style={{ padding: '12px 14px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', borderRight: '1px solid rgba(255,255,255,0.08)' }}>{h}</th>
                   ))}
                 </tr>
@@ -234,13 +269,10 @@ export default function Hospitals() {
                             {Number(hosp.bedCount).toLocaleString()} เตียง
                           </span>
                         )}
-                        {hosp.userCount && (
-                          <span style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>
-                            · {Number(hosp.userCount).toLocaleString()} user
-                          </span>
-                        )}
                       </div>
                     </td>
+                    <td style={{ padding: '13px 14px', fontSize: 13, color: '#374151', textAlign: 'center' }}>{hosp.userCount ? Number(hosp.userCount).toLocaleString() : '-'}</td>
+                    <td style={{ padding: '13px 14px', fontSize: 13, color: '#374151', textAlign: 'center' }}>{hosp.userCountAr ? Number(hosp.userCountAr).toLocaleString() : '-'}</td>
                     <td style={{ padding: '13px 14px', fontSize: 13, color: '#374151' }}>{hosp.coordinator || '-'}</td>
                     <td style={{ padding: '13px 14px', fontSize: 12, color: '#374151', whiteSpace: 'nowrap' }}>{hosp.coordinatorPhone || '-'}</td>
                     <td style={{ padding: '13px 14px', fontSize: 12, color: '#0891b2' }}>{hosp.coordinatorEmail || '-'}</td>
@@ -330,8 +362,12 @@ export default function Hospitals() {
                       <input type="number" value={form.bedCount} onChange={set('bedCount')} placeholder="0" min={0} style={I} />
                     </div>
                     <div>
-                      <label style={L}>จำนวน User</label>
+                      <label style={L}>จำนวน user เจ้าหนี้</label>
                       <input type="number" value={form.userCount} onChange={set('userCount')} placeholder="0" min={0} style={I} />
+                    </div>
+                    <div>
+                      <label style={L}>จำนวน user ลูกหนี้/รายได้</label>
+                      <input type="number" value={form.userCountAr} onChange={set('userCountAr')} placeholder="0" min={0} style={I} />
                     </div>
                   </div>
                 </Section>
@@ -410,7 +446,8 @@ export default function Hospitals() {
                   { label: 'ภาค', value: viewHosp.region || '-' },
                   { label: 'สังกัด', value: viewHosp.affiliation || '-', col: 2 },
                   { label: 'จำนวนเตียง', value: viewHosp.bedCount ? viewHosp.bedCount + ' เตียง' : '-' },
-                  { label: 'จำนวน User', value: viewHosp.userCount ? Number(viewHosp.userCount).toLocaleString() + ' คน' : '-' },
+                  { label: 'จำนวน user เจ้าหนี้', value: viewHosp.userCount ? Number(viewHosp.userCount).toLocaleString() + ' คน' : '-' },
+                  { label: 'จำนวน user ลูกหนี้/รายได้', value: viewHosp.userCountAr ? Number(viewHosp.userCountAr).toLocaleString() + ' คน' : '-' },
                 ].map(f => (
                   <div key={f.label} style={{ background: '#f8fafc', borderRadius: 8, padding: '10px 14px', gridColumn: f.col ? `span ${f.col}` : 'span 1' }}>
                     <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 2 }}>{f.label}</div>
