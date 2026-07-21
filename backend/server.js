@@ -542,12 +542,13 @@ app.post('/api/form-entries/import', async (req, res) => {
 app.get('/api/form-entries/summary', async (req, res) => {
   try {
     const [r] = await pool.query(
-      `SELECT hospital_id, COUNT(*) AS total,
-              SUM(status = 'waiting_form') AS waiting,
-              SUM(status IN ('drawn','waiting_code','waiting_review','revision')) AS inprogress,
-              SUM(status = 'done') AS done
-       FROM form_checklist_entries
-       GROUP BY hospital_id`)
+      `SELECT e.hospital_id, COUNT(*) AS total,
+              SUM(e.status = 'waiting_form') AS waiting,
+              SUM(e.status IN ('drawn','waiting_code','waiting_review','revision')) AS inprogress,
+              SUM(e.status = 'done') AS done
+       FROM form_checklist_entries e
+       JOIN form_checklist_master m ON e.master_id = m.id
+       GROUP BY e.hospital_id`)
     res.json(r.map(x => ({
       hospitalId: String(x.hospital_id),
       total: Number(x.total),
