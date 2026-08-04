@@ -334,6 +334,49 @@ app.delete('/api/system-issues/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// ─── Received Issues (รับแจ้งปัญหา) ────────────────────────────────────────────
+app.get('/api/received-issues', async (req, res) => {
+  try {
+    const [r] = await pool.query('SELECT * FROM received_issues ORDER BY report_date DESC, created_at DESC')
+    res.json(r.map(x => ({
+      id: x.id, hospitalId: x.hospital_id ? String(x.hospital_id) : '',
+      reportDate: x.report_date || '', resolvedDate: x.resolved_date || '',
+      category: x.category || '', description: x.description || '',
+      priority: x.priority, status: x.status,
+      resolution: x.resolution || '', reportedBy: x.reported_by || '',
+      receivedBy: x.received_by || '', resolvedBy: x.resolved_by || '',
+      systemName: x.system_name || '',
+    })))
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/received-issues', async (req, res) => {
+  try {
+    const d = req.body
+    const [r] = await pool.query(
+      'INSERT INTO received_issues (hospital_id,report_date,resolved_date,category,description,priority,status,resolution,reported_by,received_by,resolved_by,system_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      [nn(d.hospitalId), nd(d.reportDate), nd(d.resolvedDate), d.category, d.description, d.priority, d.status, d.resolution, d.reportedBy, d.receivedBy||'', d.resolvedBy||'', d.systemName||''])
+    res.json({ id: r.insertId, ...d })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.put('/api/received-issues/:id', async (req, res) => {
+  try {
+    const d = req.body
+    await pool.query(
+      'UPDATE received_issues SET hospital_id=?,report_date=?,resolved_date=?,category=?,description=?,priority=?,status=?,resolution=?,reported_by=?,received_by=?,resolved_by=?,system_name=? WHERE id=?',
+      [nn(d.hospitalId), nd(d.reportDate), nd(d.resolvedDate), d.category, d.description, d.priority, d.status, d.resolution, d.reportedBy, d.receivedBy||'', d.resolvedBy||'', d.systemName||'', req.params.id])
+    res.json({ id: Number(req.params.id), ...d })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.delete('/api/received-issues/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM received_issues WHERE id=?', [req.params.id])
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // ─── Advance Records ─────────────────────────────────────────────────────────
 app.get('/api/advance-records', async (req, res) => {
   try {
@@ -1268,6 +1311,31 @@ async function runMigrations() {
     console.log('✅ Migration: ตาราง standby_schedules พร้อมใช้งาน')
   } catch (e) {
     console.error('❌ Migration error (standby_schedules):', e.message)
+  }
+
+  // สร้างตาราง received_issues ถ้ายังไม่มี
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS received_issues (
+        id            INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id   INT,
+        report_date   DATE,
+        resolved_date DATE,
+        category      VARCHAR(200),
+        description   TEXT,
+        priority      ENUM('low','medium','high','critical') DEFAULT 'medium',
+        status        ENUM('open','inprogress','testing','closed') DEFAULT 'open',
+        resolution    TEXT,
+        reported_by   VARCHAR(200),
+        received_by   VARCHAR(200),
+        resolved_by   VARCHAR(200),
+        system_name   VARCHAR(200),
+        created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    console.log('✅ Migration: ตาราง received_issues พร้อมใช้งาน')
+  } catch (e) {
+    console.error('❌ Migration error (received_issues):', e.message)
   }
 }
 

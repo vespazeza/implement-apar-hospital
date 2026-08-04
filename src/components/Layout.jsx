@@ -21,6 +21,7 @@ const MENU = [
     children: [
       { path: '/training-issues', icon: '🎓', label: 'สรุปปัญหาอบรม', sub: '' },
       { path: '/system-issues', icon: '🖥️', label: 'สรุปปัญหาขึ้นระบบ', sub: '' },
+      { path: '/received-issues', icon: '📥', label: 'รับแจ้งปัญหา', sub: '' },
     ],
   },
   { path: '/risk-analysis', icon: '⚠️', label: 'วิเคราะห์ความเสี่ยง', sub: 'รายงานผู้บริหาร' },

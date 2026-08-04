@@ -10,6 +10,7 @@ import ChecklistForm from './pages/ChecklistForm'
 import ChecklistReport from './pages/ChecklistReport'
 import TrainingSummary from './pages/TrainingSummary'
 import SystemSummary from './pages/SystemSummary'
+import ReceivedIssues from './pages/ReceivedIssues'
 import RiskAnalysis from './pages/RiskAnalysis'
 import LessonsLearned from './pages/LessonsLearned'
 import Calendar from './pages/Calendar'
@@ -45,6 +46,7 @@ export default function App() {
             <Route path="standby-calendar" element={<StandByCalendar />} />
             <Route path="doc-tracking" element={<DocTracking />} />
             <Route path="system-issues" element={<SystemSummary />} />
+            <Route path="received-issues" element={<ReceivedIssues />} />
             <Route path="risk-analysis" element={<RiskAnalysis />} />
             <Route path="lessons-learned" element={<LessonsLearned />} />
             <Route path="calendar" element={<Calendar />} />

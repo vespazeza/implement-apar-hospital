@@ -65,6 +65,7 @@ export function AppProvider({ children }) {
   const [advanceData, setAdvanceData] = useState({})
   const [trainingIssues, setTrainingIssues] = useState([])
   const [systemIssues, setSystemIssues] = useState([])
+  const [receivedIssues, setReceivedIssues] = useState([])
   const [basicMasterItems, setBasicMasterItems] = useState([])
   const [formMasterItems, setFormMasterItems] = useState([])
   const [reportMasterItems, setReportMasterItems] = useState([])
@@ -84,6 +85,7 @@ export function AppProvider({ children }) {
       api.get('/checklist'),
       api.get('/training-issues'),
       api.get('/system-issues'),
+      api.get('/received-issues'),
       api.get('/basic-master'),
       api.get('/basic-entries/summary'),
       api.get('/form-master'),
@@ -92,7 +94,7 @@ export function AppProvider({ children }) {
       api.get('/report-entries/summary'),
       api.get('/advance-records'),
       api.get('/masterplan-items/summary'),
-    ]).then(([hosps, team, plans, chk, training, system, basicMaster, basicSummary, formMaster, formSummary, reportMaster, reportSummary, advRecs, mpSummary]) => {
+    ]).then(([hosps, team, plans, chk, training, system, received, basicMaster, basicSummary, formMaster, formSummary, reportMaster, reportSummary, advRecs, mpSummary]) => {
       setHospitals(hosps)
       setTeamMembers(team)
       setProjectPlans(plans)
@@ -102,6 +104,7 @@ export function AppProvider({ children }) {
       setAdvanceData(chk.advance || {})
       setTrainingIssues(training)
       setSystemIssues(system)
+      setReceivedIssues(Array.isArray(received) ? received : [])
       setBasicMasterItems(basicMaster)
       setBasicEntriesSummary(Array.isArray(basicSummary) ? basicSummary : [])
       setFormMasterItems(Array.isArray(formMaster) ? formMaster : [])
@@ -266,6 +269,22 @@ export function AppProvider({ children }) {
     setSystemIssues(prev => prev.filter(i => i.id !== id))
   }
 
+  // ── Received Issues CRUD ───────────────────────────────────────────────────
+  const addReceivedIssue = async (form) => {
+    const res = await api.post('/received-issues', form)
+    setReceivedIssues(prev => [res, ...prev])
+    return res
+  }
+  const updateReceivedIssue = async (id, form) => {
+    const res = await api.put(`/received-issues/${id}`, form)
+    setReceivedIssues(prev => prev.map(i => i.id === id ? res : i))
+    return res
+  }
+  const deleteReceivedIssue = async (id) => {
+    await api.del(`/received-issues/${id}`)
+    setReceivedIssues(prev => prev.filter(i => i.id !== id))
+  }
+
   // ── Checklist ──────────────────────────────────────────────────────────────
   const updateChecklistItem = (type, hospitalId, itemId, data) => {
     api.put(`/checklist/${type}/${hospitalId}/${itemId}`, data)
@@ -324,7 +343,7 @@ export function AppProvider({ children }) {
     <AppContext.Provider value={{
       hospitals, teamMembers, projectPlans,
       checklistBasic, checklistForm, checklistReport, advanceData, advanceRecords,
-      trainingIssues, systemIssues, basicMasterItems, formMasterItems, reportMasterItems,
+      trainingIssues, systemIssues, receivedIssues, basicMasterItems, formMasterItems, reportMasterItems,
       basicEntriesSummary, formEntriesSummary, reportEntriesSummary, masterplanSummary, loading,
       refreshBasicSummary, refreshReportSummary, refreshMasterplanSummary,
       // Report Master
@@ -343,6 +362,8 @@ export function AppProvider({ children }) {
       addTrainingIssue, updateTrainingIssue, deleteTrainingIssue,
       // System
       addSystemIssue, updateSystemIssue, deleteSystemIssue,
+      // Received Issues
+      addReceivedIssue, updateReceivedIssue, deleteReceivedIssue,
       // Checklist
       updateChecklistItem, getChecklistData, getProgress,
     }}>
