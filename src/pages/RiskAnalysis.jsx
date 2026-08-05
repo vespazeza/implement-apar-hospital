@@ -65,6 +65,34 @@ const formatDate = () => {
   return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear() + 543}`
 }
 
+// ─── Donut chart helpers ──────────────────────────────────────────────────────
+
+// Fixed categorical order (blue, orange, aqua, yellow, magenta, violet) — green is
+// skipped here since this page already uses it as the "low risk / resolved" status color.
+const PIE_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#4a3aa7']
+const PIE_LABEL_LIGHT = { '#2a78d6': true, '#eb6834': true, '#4a3aa7': true }
+const PIE_OTHER_COLOR = '#94a3b8'
+
+const polarToCartesian = (cx, cy, r, angleDeg) => {
+  const rad = (angleDeg - 90) * Math.PI / 180
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) }
+}
+
+const donutSlicePath = (cx, cy, outerR, innerR, startAngle, endAngle) => {
+  const startOuter = polarToCartesian(cx, cy, outerR, endAngle)
+  const endOuter = polarToCartesian(cx, cy, outerR, startAngle)
+  const startInner = polarToCartesian(cx, cy, innerR, endAngle)
+  const endInner = polarToCartesian(cx, cy, innerR, startAngle)
+  const largeArc = endAngle - startAngle > 180 ? 1 : 0
+  return [
+    `M ${startOuter.x} ${startOuter.y}`,
+    `A ${outerR} ${outerR} 0 ${largeArc} 0 ${endOuter.x} ${endOuter.y}`,
+    `L ${endInner.x} ${endInner.y}`,
+    `A ${innerR} ${innerR} 0 ${largeArc} 1 ${startInner.x} ${startInner.y}`,
+    'Z',
+  ].join(' ')
+}
+
 // ─── Components ───────────────────────────────────────────────────────────────
 
 function RiskBadge({ score }) {
@@ -86,6 +114,96 @@ function ScoreBar({ score, max = 15 }) {
         <div style={{ width: `${pct}%`, background: r.color, height: '100%', borderRadius: 4, transition: 'width 0.4s' }} />
       </div>
       <span style={{ fontSize: 12, fontWeight: 700, color: r.color, minWidth: 32 }}>{score.toFixed(1)}</span>
+    </div>
+  )
+}
+
+function CategoryDonut({ issues }) {
+  const [hoverIdx, setHoverIdx] = useState(null)
+  const total = issues.length
+
+  if (total === 0) {
+    return <div style={{ color: '#94a3b8', textAlign: 'center', padding: 40 }}>ยังไม่มีข้อมูลปัญหา</div>
+  }
+
+  const counts = {}
+  issues.forEach(i => {
+    const cat = i.category || 'ไม่ระบุ'
+    counts[cat] = (counts[cat] || 0) + 1
+  })
+  const sortedCats = Object.entries(counts).sort((a, b) => b[1] - a[1])
+
+  // ≤6 segments total (donut/pie legibility cap) — fold the tail into "อื่นๆ"
+  let slices
+  if (sortedCats.length <= 6) {
+    slices = sortedCats.map(([cat, count], idx) => ({ cat, count, color: PIE_COLORS[idx] }))
+  } else {
+    const top = sortedCats.slice(0, 5)
+    const restCount = sortedCats.slice(5).reduce((s, [, c]) => s + c, 0)
+    slices = top.map(([cat, count], idx) => ({ cat, count, color: PIE_COLORS[idx] }))
+    slices.push({ cat: 'อื่นๆ', count: restCount, color: PIE_OTHER_COLOR })
+  }
+
+  const R_OUT = 90, R_IN = 56, CX = 100, CY = 100
+  const GAP = slices.length > 1 ? 2 : 0
+  let cursor = 0
+  const arcs = slices.map((s, idx) => {
+    const sweep = (s.count / total) * 360
+    const start = cursor + GAP / 2
+    const end = cursor + Math.max(sweep - GAP, 0.001) + GAP / 2
+    cursor += sweep
+    return { ...s, idx, start, end, pct: Math.round((s.count / total) * 100) }
+  })
+
+  const hovered = hoverIdx != null ? arcs[hoverIdx] : null
+
+  return (
+    <div style={{ display: 'flex', gap: 28, alignItems: 'center', flexWrap: 'wrap' }}>
+      <svg width={200} height={200} viewBox="0 0 200 200" style={{ flexShrink: 0 }}>
+        {arcs.map(a => (
+          <path key={a.cat}
+            d={donutSlicePath(CX, CY, R_OUT, R_IN, a.start, a.end)}
+            fill={a.color}
+            opacity={hoverIdx == null || hoverIdx === a.idx ? 1 : 0.4}
+            style={{ transition: 'opacity 0.15s', cursor: 'pointer' }}
+            onMouseEnter={() => setHoverIdx(a.idx)}
+            onMouseLeave={() => setHoverIdx(null)}
+          />
+        ))}
+        {arcs.filter(a => a.pct >= 8).map(a => {
+          const mid = (a.start + a.end) / 2
+          const pos = polarToCartesian(CX, CY, (R_OUT + R_IN) / 2, mid)
+          return (
+            <text key={`lbl-${a.cat}`} x={pos.x} y={pos.y}
+              textAnchor="middle" dominantBaseline="middle"
+              style={{ fontSize: 12, fontWeight: 700, fill: PIE_LABEL_LIGHT[a.color] ? '#fff' : '#1e293b', pointerEvents: 'none' }}>
+              {a.pct}%
+            </text>
+          )
+        })}
+        <text x={CX} y={CY - 6} textAnchor="middle" style={{ fontSize: 22, fontWeight: 800, fill: '#1e3a5f' }}>
+          {hovered ? `${hovered.pct}%` : total}
+        </text>
+        <text x={CX} y={CY + 15} textAnchor="middle" style={{ fontSize: 10, fill: '#94a3b8' }}>
+          {hovered ? (hovered.cat.length > 14 ? hovered.cat.slice(0, 13) + '…' : hovered.cat) : 'ปัญหาทั้งหมด'}
+        </text>
+      </svg>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 220 }}>
+        {arcs.map(a => (
+          <div key={a.cat}
+            onMouseEnter={() => setHoverIdx(a.idx)}
+            onMouseLeave={() => setHoverIdx(null)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px', borderRadius: 8, cursor: 'pointer',
+              background: hoverIdx === a.idx ? '#f8fafc' : 'transparent', transition: 'background 0.15s',
+            }}>
+            <span style={{ width: 12, height: 12, borderRadius: 3, background: a.color, flexShrink: 0 }} />
+            <span style={{ fontSize: 13, color: '#374151', flex: 1 }}>{a.cat}</span>
+            <span style={{ fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }}>{a.count} รายการ</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', minWidth: 40, textAlign: 'right' }}>{a.pct}%</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -227,6 +345,13 @@ export default function RiskAnalysis() {
       <div style={{ marginBottom: 20 }}>
         <h2 style={{ fontSize: 22, color: '#1e3a5f', marginBottom: 4 }}>⚠️ วิเคราะห์ความเสี่ยง</h2>
         <p style={{ color: '#64748b', fontSize: 13 }}>ประมวลผลและวิเคราะห์ความเสี่ยงจากปัญหาอบรมและขึ้นระบบ พร้อมแนวทางป้องกัน</p>
+      </div>
+
+      {/* ภาพรวมปัญหา: สัดส่วนตามประเภท */}
+      <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 20, marginBottom: 24 }}>
+        <h3 style={{ color: '#1e3a5f', fontSize: 15, marginBottom: 4 }}>📊 ภาพรวมปัญหา</h3>
+        <p style={{ color: '#94a3b8', fontSize: 12, marginBottom: 16 }}>สัดส่วนปัญหาทั้งหมดแยกตามประเภทปัญหา ({allIssues.length} รายการ)</p>
+        <CategoryDonut issues={allIssues} />
       </div>
 
       {/* Summary cards */}
