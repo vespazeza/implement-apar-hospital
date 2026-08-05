@@ -347,11 +347,32 @@ export default function RiskAnalysis() {
         <p style={{ color: '#64748b', fontSize: 13 }}>ประมวลผลและวิเคราะห์ความเสี่ยงจากปัญหาอบรมและขึ้นระบบ พร้อมแนวทางป้องกัน</p>
       </div>
 
+      {/* Filters — scope ภาพรวมปัญหา + ภาพรวมความเสี่ยง */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={filterOverviewYear} onChange={e => setFilterOverviewYear(e.target.value)}
+          style={{ padding: '8px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 13 }}>
+          <option value="">ทุกปี พ.ศ.</option>
+          {allYears.map(y => <option key={y} value={y}>ปี {y}</option>)}
+        </select>
+        <SearchableSelect value={filterOverviewHosp} onChange={setFilterOverviewHosp}
+          options={hospitals.map(h => ({ value: String(h.id), label: h.name }))}
+          allLabel="ทุก รพ." style={{ minWidth: 200 }} />
+        {(filterOverviewYear !== currentBEYear || filterOverviewHosp) && (
+          <button onClick={() => { setFilterOverviewYear(currentBEYear); setFilterOverviewHosp('') }}
+            style={{ padding: '8px 14px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 13, cursor: 'pointer', color: '#64748b' }}>
+            ✕ ล้าง
+          </button>
+        )}
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>ข้อมูล {overviewIssues.length} รายการ</span>
+      </div>
+
       {/* ภาพรวมปัญหา: สัดส่วนตามประเภท */}
       <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 20, marginBottom: 24 }}>
         <h3 style={{ color: '#1e3a5f', fontSize: 15, marginBottom: 4 }}>📊 ภาพรวมปัญหา</h3>
-        <p style={{ color: '#94a3b8', fontSize: 12, marginBottom: 16 }}>สัดส่วนปัญหาทั้งหมดแยกตามประเภทปัญหา ({allIssues.length} รายการ)</p>
-        <CategoryDonut issues={allIssues} />
+        <p style={{ color: '#94a3b8', fontSize: 12, marginBottom: 16 }}>
+          สัดส่วนปัญหา{filterOverviewHosp ? `ของ ${getHospName(filterOverviewHosp)}` : 'ทั้งหมด'}แยกตามประเภทปัญหา ({overviewIssues.length} รายการ)
+        </p>
+        <CategoryDonut issues={overviewIssues} />
       </div>
 
       {/* Summary cards */}
@@ -385,24 +406,6 @@ export default function RiskAnalysis() {
       {/* ── Tab: Overview ── */}
       {activeTab === 'overview' && (
         <div>
-          {/* Filters */}
-          <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select value={filterOverviewYear} onChange={e => setFilterOverviewYear(e.target.value)}
-              style={{ padding: '8px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 13 }}>
-              <option value="">ทุกปี พ.ศ.</option>
-              {allYears.map(y => <option key={y} value={y}>ปี {y}</option>)}
-            </select>
-            <SearchableSelect value={filterOverviewHosp} onChange={setFilterOverviewHosp}
-              options={hospitals.map(h => ({ value: String(h.id), label: h.name }))}
-              allLabel="ทุก รพ." style={{ minWidth: 200 }} />
-            {(filterOverviewYear !== currentBEYear || filterOverviewHosp) && (
-              <button onClick={() => { setFilterOverviewYear(currentBEYear); setFilterOverviewHosp('') }}
-                style={{ padding: '8px 14px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 13, cursor: 'pointer', color: '#64748b' }}>
-                ✕ ล้าง
-              </button>
-            )}
-            <span style={{ fontSize: 12, color: '#94a3b8' }}>ข้อมูล {overviewIssues.length} รายการ</span>
-          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
           {/* Top risky hospitals */}
           <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 20 }}>
