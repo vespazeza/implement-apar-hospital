@@ -344,7 +344,6 @@ export default function RiskAnalysis() {
     <div>
       <div style={{ marginBottom: 20 }}>
         <h2 style={{ fontSize: 22, color: '#1e3a5f', marginBottom: 4 }}>⚠️ วิเคราะห์ความเสี่ยง</h2>
-        <p style={{ color: '#64748b', fontSize: 13 }}>ประมวลผลและวิเคราะห์ความเสี่ยงจากปัญหาอบรมและขึ้นระบบ พร้อมแนวทางป้องกัน</p>
       </div>
 
       {/* Filters — scope ภาพรวมปัญหา + ภาพรวมความเสี่ยง */}
@@ -374,6 +373,8 @@ export default function RiskAnalysis() {
         </p>
         <CategoryDonut issues={overviewIssues} />
       </div>
+
+      <p style={{ color: '#64748b', fontSize: 13, marginBottom: 24 }}>ประมวลผลและวิเคราะห์ความเสี่ยงจากปัญหาอบรมและขึ้นระบบ พร้อมแนวทางป้องกัน</p>
 
       {/* Summary cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px,1fr))', gap: 14, marginBottom: 24 }}>
