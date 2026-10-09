@@ -3,10 +3,11 @@ const mysql = require('mysql2/promise')
 const cors = require('cors')
 const path = require('path')
 const fs = require('fs')
+const { computeUsageScore, monthsInPeriod } = require('./usageKpi')
 
 const app = express()
 app.use(cors())
-app.use(express.json())
+app.use(express.json({ limit: '25mb' })) // รองรับ payload ใหญ่ เช่น การนำเข้าข้อมูลหลายพันแถวในคำขอเดียว
 
 // Serve React frontend (production build)
 app.use(express.static(path.join(__dirname, '../dist')))
@@ -46,7 +47,7 @@ app.get('/api/health', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const [r] = await pool.query(
-      'SELECT id, username, name FROM users WHERE username=? AND password=?',
+      'SELECT id, username, name, role FROM users WHERE username=? AND password=?',
       [req.body.username, req.body.password])
     if (!r.length) return res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' })
     res.json(r[0])
@@ -71,7 +72,7 @@ app.get('/api/hospitals', async (req, res) => {
     const [r] = await pool.query('SELECT * FROM hospitals ORDER BY name')
     res.json(r.map(h => ({
       id: h.id, name: h.name, code: h.code || '', type: h.type || '',
-      province: h.province || '', region: h.region || '', affiliation: h.affiliation || '',
+      province: h.province || '', region: h.region || '', healthRegion: h.health_region || '', affiliation: h.affiliation || '',
       address: h.address || '', bedCount: h.bed_count || 0, userCount: h.user_count || 0, userCountAr: h.user_count_ar || 0,
       coordinator: h.coordinator || '', coordinatorPhone: h.coordinator_phone || '',
       coordinatorEmail: h.coordinator_email || '',
@@ -84,10 +85,10 @@ app.post('/api/hospitals', async (req, res) => {
   try {
     const d = req.body
     const [r] = await pool.query(
-      `INSERT INTO hospitals (name,code,type,province,region,affiliation,address,
+      `INSERT INTO hospitals (name,code,type,province,region,health_region,affiliation,address,
         bed_count,user_count,user_count_ar,coordinator,coordinator_phone,coordinator_email,it_contact,it_phone,note)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [d.name,d.code,d.type,d.province,d.region,d.affiliation,d.address,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [d.name,d.code,d.type,d.province,d.region,d.healthRegion,d.affiliation,d.address,
        nn(d.bedCount),nn(d.userCount),nn(d.userCountAr),d.coordinator,d.coordinatorPhone,d.coordinatorEmail,
        d.itContact,d.itPhone,d.note])
     res.json({ id: r.insertId, ...d })
@@ -98,10 +99,10 @@ app.put('/api/hospitals/:id', async (req, res) => {
   try {
     const d = req.body
     await pool.query(
-      `UPDATE hospitals SET name=?,code=?,type=?,province=?,region=?,affiliation=?,address=?,
+      `UPDATE hospitals SET name=?,code=?,type=?,province=?,region=?,health_region=?,affiliation=?,address=?,
         bed_count=?,user_count=?,user_count_ar=?,coordinator=?,coordinator_phone=?,coordinator_email=?,
         it_contact=?,it_phone=?,note=? WHERE id=?`,
-      [d.name,d.code,d.type,d.province,d.region,d.affiliation,d.address,
+      [d.name,d.code,d.type,d.province,d.region,d.healthRegion,d.affiliation,d.address,
        nn(d.bedCount),nn(d.userCount),nn(d.userCountAr),d.coordinator,d.coordinatorPhone,d.coordinatorEmail,
        d.itContact,d.itPhone,d.note, req.params.id])
     res.json({ id: Number(req.params.id), ...d })
@@ -954,6 +955,30 @@ async function runMigrations() {
       table: 'hospitals', column: 'user_count_ar',
       sql: `ALTER TABLE hospitals ADD COLUMN user_count_ar INT NULL AFTER user_count`,
     },
+    {
+      table: 'hospitals', column: 'go_live_date',
+      sql: `ALTER TABLE hospitals ADD COLUMN go_live_date DATE NULL`,
+    },
+    {
+      table: 'hospitals', column: 'health_region',
+      sql: `ALTER TABLE hospitals ADD COLUMN health_region VARCHAR(50) NULL`,
+    },
+    {
+      table: 'users', column: 'role',
+      sql: `ALTER TABLE users ADD COLUMN role ENUM('admin','viewer') NOT NULL DEFAULT 'admin'`,
+    },
+    {
+      table: 'usage_fact_data_footprint', column: 'table_label',
+      sql: `ALTER TABLE usage_fact_data_footprint ADD COLUMN table_label VARCHAR(255) NULL AFTER table_name`,
+    },
+    {
+      table: 'usage_score_monthly', column: 'business_days_from',
+      sql: `ALTER TABLE usage_score_monthly ADD COLUMN business_days_from DATE NULL AFTER business_day_rate`,
+    },
+    {
+      table: 'usage_snapshot_user', column: 'role',
+      sql: `ALTER TABLE usage_snapshot_user ADD COLUMN role ENUM('hospital_staff','vendor_it') NULL AFTER position`,
+    },
   ]
 
   for (const m of columnMigrations) {
@@ -1336,6 +1361,212 @@ async function runMigrations() {
     console.log('✅ Migration: ตาราง received_issues พร้อมใช้งาน')
   } catch (e) {
     console.error('❌ Migration error (received_issues):', e.message)
+  }
+
+  // ตารางติดตามการใช้งาน (login/user activity) ของ BMS-Accounting — usage_*
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_import_batch (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL,
+        period_start DATE NOT NULL, period_end DATE NOT NULL,
+        spec_version VARCHAR(20), app_version VARCHAR(50),
+        file_name VARCHAR(255), sha256 CHAR(64),
+        imported_by VARCHAR(200), imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        status ENUM('ok','warning','error') DEFAULT 'ok',
+        warnings TEXT, deleted_at TIMESTAMP NULL,
+        KEY idx_hosp_period (hospital_id, period_start, period_end)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_fact_daily_activity (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL, import_batch_id INT NOT NULL,
+        activity_date DATE NOT NULL, menu_group VARCHAR(200),
+        action ENUM('add','edit','delete','import','export','post') NOT NULL,
+        outcome ENUM('success','failed') NOT NULL,
+        n_actions INT DEFAULT 0, n_users INT DEFAULT 0,
+        KEY idx_hosp (hospital_id, activity_date), KEY idx_batch (import_batch_id)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_fact_user_activity (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL, import_batch_id INT NOT NULL,
+        username VARCHAR(100) NOT NULL,
+        n_actions INT DEFAULT 0, n_add INT DEFAULT 0, n_edit INT DEFAULT 0, n_delete INT DEFAULT 0,
+        n_import INT DEFAULT 0, n_export INT DEFAULT 0, n_post INT DEFAULT 0, n_failed INT DEFAULT 0,
+        active_days INT DEFAULT 0, first_at DATETIME NULL, last_at DATETIME NULL,
+        n_offhours INT DEFAULT 0, n_ips INT DEFAULT 0,
+        KEY idx_hosp (hospital_id, username), KEY idx_batch (import_batch_id)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_fact_menu_usage (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL, import_batch_id INT NOT NULL,
+        menu_group VARCHAR(200), menu_label VARCHAR(255), username VARCHAR(100),
+        action ENUM('add','edit','delete','import','export','post') NOT NULL,
+        n_actions INT DEFAULT 0, n_failed INT DEFAULT 0,
+        KEY idx_hosp (hospital_id), KEY idx_batch (import_batch_id)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_fact_hourly (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL, import_batch_id INT NOT NULL,
+        iso_dow TINYINT NOT NULL, hour TINYINT NOT NULL,
+        n_actions INT DEFAULT 0, n_users INT DEFAULT 0,
+        KEY idx_hosp (hospital_id), KEY idx_batch (import_batch_id)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_fact_failure (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL, import_batch_id INT NOT NULL,
+        activity_date DATE, username VARCHAR(100), menu_group VARCHAR(200), menu_label VARCHAR(255),
+        action ENUM('add','edit','delete','import','export','post'),
+        status_code VARCHAR(50), error_message TEXT, n INT DEFAULT 0,
+        KEY idx_hosp (hospital_id, activity_date), KEY idx_batch (import_batch_id)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_fact_login (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL, import_batch_id INT NOT NULL,
+        occurred_at DATETIME NOT NULL,
+        event ENUM('login','logout','login_failed','license_activate') NOT NULL,
+        username VARCHAR(100), outcome ENUM('success','failed'), failure_reason VARCHAR(255), ip_address VARCHAR(64),
+        KEY idx_hosp (hospital_id, occurred_at), KEY idx_batch (import_batch_id)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_fact_journal_monthly (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL, import_batch_id INT NOT NULL,
+        ym CHAR(6) NOT NULL, source_type VARCHAR(100) NOT NULL, posted_flag VARCHAR(50) NOT NULL,
+        n_entries INT DEFAULT 0, debit_total DECIMAL(18,2) DEFAULT 0, last_update DATETIME NULL,
+        UNIQUE KEY uk_journal (hospital_id, ym, source_type, posted_flag)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_fact_data_footprint (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL, import_batch_id INT NOT NULL,
+        snapshot_date DATE, table_name VARCHAR(100), n_rows BIGINT DEFAULT 0,
+        KEY idx_hosp (hospital_id), KEY idx_batch (import_batch_id)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_snapshot_user (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL, import_batch_id INT NOT NULL,
+        snapshot_date DATE, username VARCHAR(100), full_name VARCHAR(255), position VARCHAR(200),
+        user_groups VARCHAR(500), status VARCHAR(50), last_login DATETIME NULL,
+        KEY idx_hosp (hospital_id, username), KEY idx_batch (import_batch_id)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_dim_menu_category (
+        menu_group VARCHAR(200) PRIMARY KEY,
+        category ENUM('operational','setup','reporting','other') NOT NULL DEFAULT 'other'
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_dim_position_role (
+        position VARCHAR(200) PRIMARY KEY,
+        role ENUM('hospital_staff','vendor_it') NOT NULL DEFAULT 'hospital_staff'
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_user_role_override (
+        hospital_id INT NOT NULL, username VARCHAR(100) NOT NULL,
+        role ENUM('hospital_staff','vendor_it') NOT NULL,
+        PRIMARY KEY (hospital_id, username)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_dim_posted_flag (
+        raw_value VARCHAR(50) PRIMARY KEY,
+        is_posted TINYINT(1) NOT NULL DEFAULT 0
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_kpi_settings (
+        setting_key VARCHAR(100) PRIMARY KEY,
+        setting_value TEXT
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_score_monthly (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        hospital_id INT NOT NULL, import_batch_id INT NULL,
+        period_start DATE NOT NULL, period_end DATE NOT NULL, ym CHAR(6) NOT NULL,
+        n_users_total INT DEFAULT 0, n_users_login INT DEFAULT 0, n_users_active INT DEFAULT 0,
+        active_user_rate DECIMAL(6,2) DEFAULT 0,
+        business_days INT DEFAULT 0, active_business_days INT DEFAULT 0, business_day_rate DECIMAL(6,2) DEFAULT 0,
+        n_actions_total INT DEFAULT 0, n_actions_operational INT DEFAULT 0, n_actions_setup INT DEFAULT 0, n_actions_reporting INT DEFAULT 0,
+        operational_rate DECIMAL(6,2) DEFAULT 0,
+        hospital_staff_rate DECIMAL(6,2) DEFAULT 0,
+        system_coverage INT DEFAULT 0,
+        journal_entries INT DEFAULT 0, journal_posted_rate DECIMAL(6,2) DEFAULT 0,
+        success_rate DECIMAL(6,2) DEFAULT 0, offhours_rate DECIMAL(6,2) DEFAULT 0,
+        login_failed_count INT DEFAULT 0, inactive_account_count INT DEFAULT 0, admin_account_rate DECIMAL(6,2) DEFAULT 0,
+        usage_score DECIMAL(6,2) DEFAULT 0, usage_level VARCHAR(50),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_hosp_ym (hospital_id, ym)
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `)
+    // seed หมวดหมู่เมนู (ตามรายชื่อที่พบในระบบจริง) — แก้ไขได้ภายหลังจากหน้าตั้งค่า
+    const menuCategorySeed = [
+      ['ระบบลูกหนี้', 'operational'], ['ระบบเจ้าหนี้', 'operational'], ['ระบบบัญชี', 'operational'],
+      ['เมนูรายได้', 'operational'], ['ครุภัณฑ์', 'operational'],
+      ['ข้อมูลพื้นฐานระบบบัญชี', 'setup'], ['ข้อมูลพื้นฐานระบบเจ้าหนี้', 'setup'],
+      ['ข้อมูลพื้นฐานระบบลูกหนี้', 'setup'], ['ความปลอดภัย', 'setup'],
+      ['รายงาน', 'reporting'], ['ผู้ช่วย AI', 'reporting'],
+    ]
+    for (const [mg, cat] of menuCategorySeed) {
+      await pool.query('INSERT IGNORE INTO usage_dim_menu_category (menu_group, category) VALUES (?,?)', [mg, cat])
+    }
+    // seed mapping ตำแหน่ง → role เริ่มต้น (แก้รายคนได้ที่ usage_user_role_override)
+    const positionRoleSeed = [
+      ['เจ้าพนักงานการเงินและบัญชี', 'hospital_staff'], ['นักวิชาการเงินและบัญชี', 'hospital_staff'],
+      ['เจ้าหน้าที่การเงิน', 'hospital_staff'], ['เจ้าหน้าที่บัญชี', 'hospital_staff'],
+      ['เจ้าพนักงานพัสดุ', 'hospital_staff'], ['นักวิชาการพัสดุ', 'hospital_staff'],
+      ['นักวิชาการคอมพิวเตอร์', 'vendor_it'],
+    ]
+    for (const [pos, role] of positionRoleSeed) {
+      await pool.query('INSERT IGNORE INTO usage_dim_position_role (position, role) VALUES (?,?)', [pos, role])
+    }
+    // seed ค่า posted_flag ดิบที่ถือว่า "ผ่านรายการ" แล้ว (แก้ได้ที่หน้าตั้งค่า)
+    const postedFlagSeed = [['posted', 1], ['Y', 1], ['true', 1], ['1', 1], ['pending', 0], ['N', 0], ['false', 0], ['0', 0]]
+    for (const [raw, posted] of postedFlagSeed) {
+      await pool.query('INSERT IGNORE INTO usage_dim_posted_flag (raw_value, is_posted) VALUES (?,?)', [raw, posted])
+    }
+    // seed เกณฑ์สี/น้ำหนักคะแนนเริ่มต้นตามข้อ 4
+    const [kpiCfg] = await pool.query('SELECT 1 FROM usage_kpi_settings WHERE setting_key=?', ['kpi_config'])
+    if (kpiCfg.length === 0) {
+      await pool.query('INSERT INTO usage_kpi_settings (setting_key, setting_value) VALUES (?,?)', ['kpi_config', JSON.stringify({
+        weights: { business_day_rate: 29, hospital_staff_rate: 29, system_coverage: 24, has_journal: 18 },
+        thresholds: {
+          active_user_rate: { green: 60, yellow: 30 },
+          business_day_rate: { green: 80, yellow: 50 },
+          hospital_staff_rate: { green: 70, yellow: 40 },
+          journal_posted_rate: { green: 95 },
+          success_rate: { green: 97, yellow: 90 },
+          offhours_warn: 20, admin_account_warn: 30, inactive_days: 30, login_failed_per_day: 5,
+        },
+        levels: [
+          { min: 80, label: 'ใช้งานจริงเต็มรูปแบบ' },
+          { min: 50, label: 'ใช้งานบางส่วน' },
+          { min: 20, label: 'เริ่มต้น/ตั้งค่า' },
+          { min: 0, label: 'ไม่มีการใช้งาน' },
+        ],
+      })])
+    }
+    console.log('✅ Migration: ตาราง usage_* (ติดตามการใช้งาน/login) พร้อมใช้งาน')
+  } catch (e) {
+    console.error('❌ Migration error (usage_*):', e.message)
   }
 }
 
@@ -1859,6 +2090,382 @@ app.get('/api/hospcode/search', async (req, res) => {
       [codeLike, like, codeLike]
     )
     res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── Usage import (นำเข้าไฟล์ USAGE_* — login/user activity) ───────────────────
+// แปลงวันที่ dd/mm/yyyy แบบ พ.ศ. (ตามที่ BMS-Accounting export ออกมา) เป็น yyyy-mm-dd ค.ศ.
+const usgDateToSql = (s) => {
+  const m = String(s || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/)
+  if (!m) return null
+  const [, d, mo, yBE, hh, mi, ss] = m
+  const datePart = `${Number(yBE) - 543}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`
+  return hh ? `${datePart} ${hh.padStart(2, '0')}:${mi}:${ss || '00'}` : datePart
+}
+const usgYmToSql = (s) => String(s || '').replace('-', '').trim() // "2026-05" -> "202605"
+const usgNum = (v) => { const n = Number(String(v ?? '').replace(/,/g, '')); return Number.isFinite(n) && String(v ?? '').trim() !== '' ? n : null }
+const usgInt = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null }
+const usgTxt = (v) => (v == null ? '' : String(v).trim())
+
+const USAGE_REPORTS = {
+  daily_activity: {
+    table: 'usage_fact_daily_activity',
+    cols: ['hospital_id', 'import_batch_id', 'activity_date', 'menu_group', 'action', 'outcome', 'n_actions', 'n_users'],
+    map: (row, ctx) => [ctx.hospitalId, ctx.batchId, usgDateToSql(row.activity_date), usgTxt(row.menu_group), usgTxt(row.action), usgTxt(row.outcome), usgInt(row.n_actions), usgInt(row.n_users)],
+  },
+  user_activity: {
+    table: 'usage_fact_user_activity',
+    cols: ['hospital_id', 'import_batch_id', 'username', 'n_actions', 'n_add', 'n_edit', 'n_delete', 'n_import', 'n_export', 'n_post', 'n_failed', 'active_days', 'first_at', 'last_at', 'n_offhours', 'n_ips'],
+    map: (row, ctx) => [
+      ctx.hospitalId, ctx.batchId, usgTxt(row.username), usgInt(row.n_actions), usgInt(row.n_add), usgInt(row.n_edit), usgInt(row.n_delete),
+      usgInt(row.n_import), usgInt(row.n_export), usgInt(row.n_post), usgInt(row.n_failed), usgInt(row.active_days),
+      usgDateToSql(row.first_at), usgDateToSql(row.last_at), usgInt(row.n_offhours), usgInt(row.n_ips),
+    ],
+  },
+  menu_usage: {
+    table: 'usage_fact_menu_usage',
+    cols: ['hospital_id', 'import_batch_id', 'menu_group', 'menu_label', 'username', 'action', 'n_actions', 'n_failed'],
+    map: (row, ctx) => [ctx.hospitalId, ctx.batchId, usgTxt(row.menu_group), usgTxt(row.menu_label), usgTxt(row.username), usgTxt(row.action), usgInt(row.n_actions), usgInt(row.n_failed)],
+  },
+  hourly: {
+    table: 'usage_fact_hourly',
+    cols: ['hospital_id', 'import_batch_id', 'iso_dow', 'hour', 'n_actions', 'n_users'],
+    map: (row, ctx) => [ctx.hospitalId, ctx.batchId, usgInt(row.iso_dow), usgInt(row.hour), usgInt(row.n_actions), usgInt(row.n_users)],
+  },
+  failures: {
+    table: 'usage_fact_failure',
+    cols: ['hospital_id', 'import_batch_id', 'activity_date', 'username', 'menu_group', 'menu_label', 'action', 'status_code', 'error_message', 'n'],
+    map: (row, ctx) => [ctx.hospitalId, ctx.batchId, usgDateToSql(row.activity_date), usgTxt(row.username), usgTxt(row.menu_group), usgTxt(row.menu_label), usgTxt(row.action), usgTxt(row.status_code), usgTxt(row.error_message), usgInt(row.n) || 1],
+  },
+  login: {
+    table: 'usage_fact_login',
+    cols: ['hospital_id', 'import_batch_id', 'occurred_at', 'event', 'username', 'outcome', 'failure_reason', 'ip_address'],
+    map: (row, ctx) => [ctx.hospitalId, ctx.batchId, usgDateToSql(row.occurred_at), usgTxt(row.event), usgTxt(row.username), usgTxt(row.outcome), usgTxt(row.failure_reason), usgTxt(row.ip_address)],
+  },
+  data_footprint: {
+    table: 'usage_fact_data_footprint',
+    cols: ['hospital_id', 'import_batch_id', 'snapshot_date', 'table_name', 'table_label', 'n_rows'],
+    map: (row, ctx) => [ctx.hospitalId, ctx.batchId, ctx.periodEnd, usgTxt(row.table_name), usgTxt(row.table_label), usgInt(row.n_rows)],
+  },
+  users: {
+    table: 'usage_snapshot_user',
+    cols: ['hospital_id', 'import_batch_id', 'snapshot_date', 'username', 'full_name', 'position', 'role', 'user_groups', 'status', 'last_login'],
+    map: (row, ctx) => {
+      const role = usgTxt(row.role).toLowerCase()
+      return [
+        ctx.hospitalId, ctx.batchId, ctx.periodEnd, usgTxt(row.username), usgTxt(row.full_name), usgTxt(row.position),
+        ['hospital_staff', 'vendor_it'].includes(role) ? role : null,
+        usgTxt(row.user_groups), usgTxt(row.status), usgDateToSql(row.last_login),
+      ]
+    },
+  },
+}
+// journal_monthly แยกไปต่างหากเพราะ upsert ข้าม batch (ซ้อนทับปีงบประมาณ ไฟล์ใหม่กว่าชนะ) ไม่ใช่ลบทั้ง batch
+
+app.post('/api/usage-import', async (req, res) => {
+  const { hospitalId, periodStart, periodEnd, reports } = req.body
+  if (!hospitalId || !periodStart || !periodEnd) return res.status(400).json({ error: 'กรุณาระบุโรงพยาบาลและช่วงวันที่ให้ครบ' })
+  if (!Array.isArray(reports) || !reports.length) return res.status(400).json({ error: 'ไม่พบไฟล์ที่จะนำเข้า' })
+
+  try {
+    // นำเข้าซ้ำ รพ./งวดเดิม = แทนที่ทั้งงวดในทรานแซกชันเดียว (ลบ batch เดิม + fact ที่ผูกกับมันทั้งหมด)
+    const [oldBatches] = await pool.query('SELECT id FROM usage_import_batch WHERE hospital_id=? AND period_start=? AND period_end=? AND deleted_at IS NULL', [hospitalId, periodStart, periodEnd])
+    for (const old of oldBatches) {
+      for (const def of Object.values(USAGE_REPORTS)) {
+        await pool.query(`DELETE FROM ${def.table} WHERE import_batch_id=?`, [old.id])
+      }
+      await pool.query('DELETE FROM usage_import_batch WHERE id=?', [old.id])
+    }
+
+    const sourceFiles = reports.map(r => r.sourceFile).filter(Boolean).join(', ')
+    const [batchResult] = await pool.query(
+      `INSERT INTO usage_import_batch (hospital_id, period_start, period_end, spec_version, file_name, imported_by, status) VALUES (?,?,?,?,?,?,?)`,
+      [hospitalId, periodStart, periodEnd, '1.0', sourceFiles, req.body.importedBy || '', 'ok']
+    )
+    const batchId = batchResult.insertId
+    const ctx = { hospitalId, batchId, periodEnd }
+
+    const results = []
+    for (const r of reports) {
+      if (r.code === 'journal_monthly') {
+        try {
+          const rows = Array.isArray(r.rows) ? r.rows : []
+          for (const row of rows) {
+            await pool.query(
+              `INSERT INTO usage_fact_journal_monthly (hospital_id, import_batch_id, ym, source_type, posted_flag, n_entries, debit_total, last_update)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON DUPLICATE KEY UPDATE import_batch_id=VALUES(import_batch_id), n_entries=VALUES(n_entries), debit_total=VALUES(debit_total), last_update=VALUES(last_update)`,
+              [hospitalId, batchId, usgYmToSql(row.ym), usgTxt(row.source_type), usgTxt(row.posted_flag), usgInt(row.n_entries), usgNum(row.debit_total), usgDateToSql(row.last_update)]
+            )
+          }
+          results.push({ code: r.code, ok: true, table: 'usage_fact_journal_monthly', rowCount: rows.length })
+        } catch (e) { results.push({ code: r.code, ok: false, message: e.message }) }
+        continue
+      }
+      const def = USAGE_REPORTS[r.code]
+      if (!def) { results.push({ code: r.code, ok: false, message: 'ไม่รู้จักชนิดรายงานนี้' }); continue }
+      try {
+        const rows = Array.isArray(r.rows) ? r.rows : []
+        if (rows.length) {
+          const placeholders = `(${def.cols.map(() => '?').join(',')})`
+          const values = rows.map(row => def.map(row, ctx)).flat()
+          await pool.query(`INSERT INTO ${def.table} (${def.cols.join(',')}) VALUES ${rows.map(() => placeholders).join(',')}`, values)
+        }
+        results.push({ code: r.code, ok: true, table: def.table, rowCount: rows.length })
+      } catch (e) { results.push({ code: r.code, ok: false, message: e.message }) }
+    }
+
+    let score = null
+    try { score = await computeUsageScore(pool, { hospitalId, periodStart, periodEnd, importBatchId: batchId }) }
+    catch (e) { results.push({ code: 'usage_score', ok: false, message: 'คำนวณคะแนนไม่สำเร็จ: ' + e.message }) }
+
+    res.json({ results, batchId, score })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── Usage dashboard (login/user activity ของ BMS-Accounting) ─────────────────
+// ภาพรวมทุก รพ. — เอารอบล่าสุดของแต่ละ รพ. จาก usage_score_monthly + sparkline ย้อนหลัง 6 รอบ
+app.get('/api/usage/overview', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM usage_score_monthly ORDER BY ym DESC')
+    const [hosps] = await pool.query('SELECT id, name, province, health_region FROM hospitals')
+    const hospMap = {}
+    hosps.forEach(h => { hospMap[h.id] = h })
+
+    const byHosp = {}
+    rows.forEach(r => { (byHosp[r.hospital_id] ||= []).push(r) })
+
+    const result = Object.entries(byHosp).map(([hospitalId, list]) => {
+      list.sort((a, b) => b.ym.localeCompare(a.ym))
+      const latest = list[0]
+      const prev = list[1]
+      const h = hospMap[hospitalId] || {}
+      return {
+        hospitalId: Number(hospitalId), hospitalName: h.name || `รพ. ${hospitalId}`,
+        province: h.province || '', healthRegion: h.health_region || '',
+        ym: latest.ym,
+        usageScore: Number(latest.usage_score), usageLevel: latest.usage_level,
+        businessDayRate: Number(latest.business_day_rate), businessDaysFrom: latest.business_days_from, hospitalStaffRate: Number(latest.hospital_staff_rate),
+        systemCoverage: latest.system_coverage, journalEntries: latest.journal_entries,
+        activeUserRate: Number(latest.active_user_rate), nUsersLogin: latest.n_users_login, nActionsTotal: latest.n_actions_total,
+        loginFailedCount: latest.login_failed_count, successRate: Number(latest.success_rate),
+        scoreDelta: prev ? Math.round((Number(latest.usage_score) - Number(prev.usage_score)) * 100) / 100 : null,
+        sparkline: list.slice(0, 6).reverse().map(r => ({ ym: r.ym, score: Number(r.usage_score) })),
+      }
+    }).sort((a, b) => b.usageScore - a.usageScore)
+
+    res.json(result)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// รอบข้อมูลที่มีของ รพ. หนึ่ง
+app.get('/api/usage/periods/:hospitalId', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT ym, period_start, period_end, usage_score FROM usage_score_monthly WHERE hospital_id=? ORDER BY ym DESC',
+      [req.params.hospitalId]
+    )
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// รายละเอียด Usage ของ รพ. หนึ่งในรอบที่เลือก (ครบทุกส่วนของหน้ารายโรงพยาบาล)
+app.get('/api/usage/hospital/:hospitalId', async (req, res) => {
+  const { hospitalId } = req.params
+  const { ym } = req.query
+  if (!ym) return res.status(400).json({ error: 'ต้องระบุ ym' })
+  try {
+    const [scoreRows] = await pool.query('SELECT * FROM usage_score_monthly WHERE hospital_id=? AND ym=?', [hospitalId, ym])
+    if (!scoreRows.length) return res.json(null)
+    const score = scoreRows[0]
+    const batchId = score.import_batch_id
+
+    const [batchRows] = await pool.query('SELECT * FROM usage_import_batch WHERE id=?', [batchId])
+    const [daily] = await pool.query('SELECT activity_date, menu_group, action, outcome, n_actions FROM usage_fact_daily_activity WHERE import_batch_id=? ORDER BY activity_date', [batchId])
+    const [menuUsage] = await pool.query('SELECT menu_group, menu_label, SUM(n_actions) n_actions, SUM(n_failed) n_failed FROM usage_fact_menu_usage WHERE import_batch_id=? GROUP BY menu_group, menu_label ORDER BY n_actions DESC LIMIT 12', [batchId])
+    const [userActivity] = await pool.query('SELECT * FROM usage_fact_user_activity WHERE import_batch_id=? ORDER BY n_actions DESC', [batchId])
+    const [snapUsers] = await pool.query('SELECT * FROM usage_snapshot_user WHERE import_batch_id=?', [batchId])
+    const [hourly] = await pool.query('SELECT iso_dow, hour, n_actions FROM usage_fact_hourly WHERE import_batch_id=?', [batchId])
+    const months = monthsInPeriod(score.period_start, score.period_end)
+    const [journal] = await pool.query(
+      `SELECT ym, source_type, posted_flag, n_entries FROM usage_fact_journal_monthly WHERE hospital_id=? AND ym IN (${months.map(() => '?').join(',') || 'NULL'}) ORDER BY ym`,
+      [hospitalId, ...months]
+    )
+    const [failures] = await pool.query('SELECT * FROM usage_fact_failure WHERE import_batch_id=? ORDER BY activity_date DESC LIMIT 200', [batchId])
+    const [logins] = await pool.query('SELECT * FROM usage_fact_login WHERE import_batch_id=? ORDER BY occurred_at DESC LIMIT 300', [batchId])
+
+    const [posRoleRows] = await pool.query('SELECT position, role FROM usage_dim_position_role')
+    const posRole = {}
+    posRoleRows.forEach(r => { posRole[r.position] = r.role })
+    const [overrideRows] = await pool.query('SELECT username, role FROM usage_user_role_override WHERE hospital_id=?', [hospitalId])
+    const overrideMap = {}
+    overrideRows.forEach(r => { overrideMap[r.username] = r.role })
+    const snapByUser = {}
+    snapUsers.forEach(u => { snapByUser[u.username] = u })
+
+    const users = userActivity.map(u => {
+      const snap = snapByUser[u.username] || {}
+      return {
+        username: u.username, fullName: snap.full_name || '', position: snap.position || '',
+        role: overrideMap[u.username] || snap.role || posRole[snap.position] || 'vendor_it',
+        status: snap.status || '', lastLogin: snap.last_login || null,
+        nActions: u.n_actions, nAdd: u.n_add, nEdit: u.n_edit, nDelete: u.n_delete,
+        nImport: u.n_import, nExport: u.n_export, nPost: u.n_post, nFailed: u.n_failed,
+        activeDays: u.active_days, firstAt: u.first_at, lastAt: u.last_at, nOffhours: u.n_offhours, nIps: u.n_ips,
+      }
+    })
+
+    res.json({ score, batch: batchRows[0] || null, daily, menuUsage, users, snapUsers, hourly, journal, failures, logins })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── จัดการผู้ใช้งาน (role admin/viewer) ───────────────────────────────────────
+app.get('/api/users', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT id, username, name, role, created_at FROM users ORDER BY id')
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+app.put('/api/users/:id/role', async (req, res) => {
+  try {
+    const { role } = req.body
+    if (!['admin', 'viewer'].includes(role)) return res.status(400).json({ error: 'role ต้องเป็น admin หรือ viewer เท่านั้น' })
+    await pool.query('UPDATE users SET role=? WHERE id=?', [role, req.params.id])
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── ตั้งค่า Usage: mapping หมวดเมนู / role ตำแหน่ง / posted_flag / น้ำหนักคะแนน ───
+app.get('/api/usage-settings/menu-category', async (req, res) => {
+  try { const [r] = await pool.query('SELECT menu_group, category FROM usage_dim_menu_category ORDER BY category, menu_group'); res.json(r) }
+  catch (e) { res.status(500).json({ error: e.message }) }
+})
+app.put('/api/usage-settings/menu-category', async (req, res) => {
+  try {
+    const { menuGroup, category } = req.body
+    if (!menuGroup || !['operational', 'setup', 'reporting', 'other'].includes(category)) return res.status(400).json({ error: 'ข้อมูลไม่ถูกต้อง' })
+    await pool.query('INSERT INTO usage_dim_menu_category (menu_group, category) VALUES (?,?) ON DUPLICATE KEY UPDATE category=VALUES(category)', [menuGroup, category])
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+app.delete('/api/usage-settings/menu-category/:menuGroup', async (req, res) => {
+  try { await pool.query('DELETE FROM usage_dim_menu_category WHERE menu_group=?', [req.params.menuGroup]); res.json({ ok: true }) }
+  catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/usage-settings/position-role', async (req, res) => {
+  try { const [r] = await pool.query('SELECT position, role FROM usage_dim_position_role ORDER BY position'); res.json(r) }
+  catch (e) { res.status(500).json({ error: e.message }) }
+})
+app.put('/api/usage-settings/position-role', async (req, res) => {
+  try {
+    const { position, role } = req.body
+    if (!position || !['hospital_staff', 'vendor_it'].includes(role)) return res.status(400).json({ error: 'ข้อมูลไม่ถูกต้อง' })
+    await pool.query('INSERT INTO usage_dim_position_role (position, role) VALUES (?,?) ON DUPLICATE KEY UPDATE role=VALUES(role)', [position, role])
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+app.delete('/api/usage-settings/position-role/:position', async (req, res) => {
+  try { await pool.query('DELETE FROM usage_dim_position_role WHERE position=?', [req.params.position]); res.json({ ok: true }) }
+  catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/usage-settings/role-override', async (req, res) => {
+  try {
+    const { hospitalId } = req.query
+    const [r] = hospitalId
+      ? await pool.query('SELECT hospital_id, username, role FROM usage_user_role_override WHERE hospital_id=?', [hospitalId])
+      : await pool.query('SELECT hospital_id, username, role FROM usage_user_role_override')
+    res.json(r)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+app.put('/api/usage-settings/role-override', async (req, res) => {
+  try {
+    const { hospitalId, username, role } = req.body
+    if (!hospitalId || !username || !['hospital_staff', 'vendor_it'].includes(role)) return res.status(400).json({ error: 'ข้อมูลไม่ถูกต้อง' })
+    await pool.query('INSERT INTO usage_user_role_override (hospital_id, username, role) VALUES (?,?,?) ON DUPLICATE KEY UPDATE role=VALUES(role)', [hospitalId, username, role])
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+app.delete('/api/usage-settings/role-override/:hospitalId/:username', async (req, res) => {
+  try { await pool.query('DELETE FROM usage_user_role_override WHERE hospital_id=? AND username=?', [req.params.hospitalId, req.params.username]); res.json({ ok: true }) }
+  catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/usage-settings/posted-flag', async (req, res) => {
+  try { const [r] = await pool.query('SELECT raw_value, is_posted FROM usage_dim_posted_flag ORDER BY raw_value'); res.json(r) }
+  catch (e) { res.status(500).json({ error: e.message }) }
+})
+app.put('/api/usage-settings/posted-flag', async (req, res) => {
+  try {
+    const { rawValue, isPosted } = req.body
+    if (!rawValue) return res.status(400).json({ error: 'ข้อมูลไม่ถูกต้อง' })
+    await pool.query('INSERT INTO usage_dim_posted_flag (raw_value, is_posted) VALUES (?,?) ON DUPLICATE KEY UPDATE is_posted=VALUES(is_posted)', [rawValue, isPosted ? 1 : 0])
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+app.delete('/api/usage-settings/posted-flag/:rawValue', async (req, res) => {
+  try { await pool.query('DELETE FROM usage_dim_posted_flag WHERE raw_value=?', [req.params.rawValue]); res.json({ ok: true }) }
+  catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/usage-settings/kpi-config', async (req, res) => {
+  try {
+    const [r] = await pool.query('SELECT setting_value FROM usage_kpi_settings WHERE setting_key=?', ['kpi_config'])
+    res.json(r.length ? JSON.parse(r[0].setting_value) : null)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+app.put('/api/usage-settings/kpi-config', async (req, res) => {
+  try {
+    await pool.query('INSERT INTO usage_kpi_settings (setting_key, setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)', ['kpi_config', JSON.stringify(req.body)])
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── เปรียบเทียบ รพ. (2-5 แห่ง) ────────────────────────────────────────────────
+app.get('/api/usage/compare', async (req, res) => {
+  try {
+    const ids = String(req.query.hospitalIds || '').split(',').map(s => s.trim()).filter(Boolean)
+    if (!ids.length) return res.json([])
+    const placeholders = ids.map(() => '?').join(',')
+    const [rows] = await pool.query(`SELECT * FROM usage_score_monthly WHERE hospital_id IN (${placeholders}) ORDER BY ym`, ids)
+    const [hosps] = await pool.query(`SELECT id, name FROM hospitals WHERE id IN (${placeholders})`, ids)
+    const hospMap = {}
+    hosps.forEach(h => { hospMap[h.id] = h.name })
+    const byHosp = {}
+    rows.forEach(r => {
+      (byHosp[r.hospital_id] ||= []).push({
+        ym: r.ym, usageScore: Number(r.usage_score), businessDayRate: Number(r.business_day_rate),
+        hospitalStaffRate: Number(r.hospital_staff_rate), successRate: Number(r.success_rate),
+        activeUserRate: Number(r.active_user_rate), systemCoverage: r.system_coverage, journalEntries: r.journal_entries,
+      })
+    })
+    res.json(ids.map(id => ({ hospitalId: Number(id), hospitalName: hospMap[id] || `รพ. ${id}`, history: byHosp[id] || [] })))
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── ติดตามการส่งข้อมูล (รพ. × เดือน) ──────────────────────────────────────────
+app.get('/api/usage/submission-tracking', async (req, res) => {
+  try {
+    const months = Math.min(Number(req.query.months) || 6, 24)
+    const [hosps] = await pool.query('SELECT id, name, province FROM hospitals ORDER BY name')
+    const [scoreRows] = await pool.query('SELECT hospital_id, ym, usage_score FROM usage_score_monthly')
+    const byHosp = {}
+    scoreRows.forEach(r => { (byHosp[r.hospital_id] ||= {})[r.ym] = Number(r.usage_score) })
+
+    const now = new Date()
+    const ymList = []
+    for (let i = 0; i < months; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      ymList.push(`${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`)
+    }
+    ymList.reverse()
+
+    const result = hosps.map(h => ({
+      hospitalId: h.id, hospitalName: h.name, province: h.province,
+      months: ymList.map(ym => ({ ym, sent: !!(byHosp[h.id] && byHosp[h.id][ym] != null), score: byHosp[h.id]?.[ym] ?? null })),
+    }))
+    res.json({ months: ymList, hospitals: result })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 

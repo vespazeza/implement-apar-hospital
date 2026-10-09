@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { isViewer } from '../utils/auth'
 
 const MENU = [
   { path: '/dashboard', icon: '📊', label: 'Dashboard', sub: 'ภาพรวมทั้งระบบ' },
@@ -25,6 +26,17 @@ const MENU = [
     ],
   },
   { path: '/risk-analysis', icon: '⚠️', label: 'วิเคราะห์ความเสี่ยง', sub: 'รายงานผู้บริหาร' },
+  {
+    group: true, icon: '📶', label: 'Usage Monitoring', sub: 'ติดตาม login/การใช้งาน',
+    children: [
+      { path: '/usage-import', icon: '📥', label: 'นำเข้าข้อมูล', sub: '', adminOnly: true },
+      { path: '/usage-overview', icon: '📊', label: 'ภาพรวมทุก รพ.', sub: '' },
+      { path: '/usage-hospital', icon: '🏥', label: 'รายโรงพยาบาล', sub: '' },
+      { path: '/usage-compare', icon: '⚖️', label: 'เปรียบเทียบ รพ.', sub: '' },
+      { path: '/usage-submission', icon: '📬', label: 'ติดตามการส่งข้อมูล', sub: '' },
+      { path: '/usage-settings', icon: '⚙️', label: 'ตั้งค่า', sub: '', adminOnly: true },
+    ],
+  },
   { path: '/lessons-learned', icon: '📚', label: 'สรุปบทเรียน', sub: 'ถอดบทเรียนการติดตั้ง' },
   { path: '/holiday', icon: '🗓️', label: 'จัดการวันหยุด', sub: 'Holiday Management' },
   { path: '/standby-calendar', icon: '🗓️', label: 'ตาราง Stand By', sub: 'Stand By Schedule' },
@@ -35,6 +47,7 @@ export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}')
+  const viewer = isViewer()
   const [collapsed, setCollapsed] = useState(false)
 
   // Auto-expand groups that contain the active route
@@ -126,7 +139,7 @@ export default function Layout() {
                   {/* Children */}
                   {!collapsed && open && (
                     <div style={{ marginLeft: 14, marginBottom: 4, borderLeft: '2px solid rgba(8,145,178,0.3)', paddingLeft: 6 }}>
-                      {item.children.map(child => (
+                      {item.children.filter(c => !c.adminOnly || !viewer).map(child => (
                         <NavLink key={child.path} to={child.path} style={({ isActive }) => ({
                           ...navItemStyle(isActive),
                           padding: '9px 12px', marginBottom: 2,

@@ -13,9 +13,10 @@ const HOSPITAL_TYPES = [
 ]
 
 const REGIONS = ['ภาคเหนือ', 'ภาคกลาง', 'ภาคตะวันออกเฉียงเหนือ', 'ภาคตะวันออก', 'ภาคตะวันตก', 'ภาคใต้']
+const HEALTH_REGIONS = Array.from({ length: 13 }, (_, i) => `เขตสุขภาพที่ ${i + 1}`)
 
 const EMPTY_FORM = {
-  name: '', code: '', province: '', region: '', type: 'S',
+  name: '', code: '', province: '', region: '', healthRegion: '', type: 'S',
   affiliation: '', address: '',
   coordinator: '', coordinatorPhone: '', coordinatorEmail: '',
   itContact: '', itPhone: '',
@@ -348,6 +349,13 @@ export default function Hospitals() {
                         {REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
                       </select>
                     </div>
+                    <div>
+                      <label style={L}>เขตสุขภาพ</label>
+                      <select value={form.healthRegion} onChange={set('healthRegion')} style={I}>
+                        <option value="">-- เลือกเขตสุขภาพ --</option>
+                        {HEALTH_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    </div>
                     <div style={{ gridColumn: 'span 2' }}>
                       <label style={L}>สังกัด / หน่วยงานต้นสังกัด</label>
                       <input value={form.affiliation} onChange={set('affiliation')} placeholder="เช่น สำนักงานสาธารณสุขจังหวัดเชียงใหม่" style={I} />
@@ -444,6 +452,7 @@ export default function Hospitals() {
                 {[
                   { label: 'จังหวัด', value: viewHosp.province || '-' },
                   { label: 'ภาค', value: viewHosp.region || '-' },
+                  { label: 'เขตสุขภาพ', value: viewHosp.healthRegion || '-' },
                   { label: 'สังกัด', value: viewHosp.affiliation || '-', col: 2 },
                   { label: 'จำนวนเตียง', value: viewHosp.bedCount ? viewHosp.bedCount + ' เตียง' : '-' },
                   { label: 'จำนวน user เจ้าหนี้', value: viewHosp.userCount ? Number(viewHosp.userCount).toLocaleString() + ' คน' : '-' },

@@ -19,6 +19,12 @@ import Team from './pages/Team'
 import HolidayManagement from './pages/HolidayManagement'
 import StandByCalendar from './pages/StandByCalendar'
 import DocTracking from './pages/DocTracking'
+import UsageImport from './pages/UsageImport'
+import UsageOverview from './pages/UsageOverview'
+import UsageCompare from './pages/UsageCompare'
+import UsageSubmissionTracking from './pages/UsageSubmissionTracking'
+import UsageSettings from './pages/UsageSettings'
+import UsageHospitalDetail from './pages/UsageHospitalDetail'
 
 function PrivateRoute({ children }) {
   const user = localStorage.getItem('currentUser')
@@ -48,6 +54,12 @@ export default function App() {
             <Route path="system-issues" element={<SystemSummary />} />
             <Route path="received-issues" element={<ReceivedIssues />} />
             <Route path="risk-analysis" element={<RiskAnalysis />} />
+            <Route path="usage-import" element={<UsageImport />} />
+            <Route path="usage-overview" element={<UsageOverview />} />
+            <Route path="usage-hospital" element={<UsageHospitalDetail />} />
+            <Route path="usage-compare" element={<UsageCompare />} />
+            <Route path="usage-submission" element={<UsageSubmissionTracking />} />
+            <Route path="usage-settings" element={<UsageSettings />} />
             <Route path="lessons-learned" element={<LessonsLearned />} />
             <Route path="calendar" element={<Calendar />} />
             <Route path="holiday" element={<HolidayManagement />} />

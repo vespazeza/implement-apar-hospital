@@ -4,8 +4,10 @@ import { loadIssueTypes } from './TrainingSummary'
 import SearchableSelect from '../components/SearchableSelect'
 import DateInput from '../components/DateInput'
 import * as XLSX from 'xlsx'
+import { textSimilarity } from '../utils/textSimilarity'
 
 const API = import.meta.env.VITE_API_URL || ''
+const SIMILAR_ISSUE_THRESHOLD = 0.35
 
 const PRIORITY = [
   { value: 'low', label: 'ต่ำ', color: '#16a34a', bg: '#f0fdf4' },
@@ -86,6 +88,19 @@ export default function ReceivedIssues() {
   const [issueTypes] = useState(loadIssueTypes)
 
   const set = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }))
+
+  // ปัญหาเดิมที่อาจเป็นเรื่องเดียวกัน — ไม่จำกัด รพ. จับจากระบบงานเดียวกัน + ความคล้ายของข้อความ "รายละเอียดปัญหา"
+  // (ไม่ใช้ category เพราะหยาบเกินไป ปัญหาคนละเรื่องมักอยู่ประเภทเดียวกันได้)
+  const similarIssues = (() => {
+    const desc = (form.description || '').trim()
+    if (!form.systemName || desc.length < 5) return []
+    return receivedIssues
+      .filter(i => i.systemName === form.systemName && i.id !== editId && (i.description || '').trim())
+      .map(i => ({ issue: i, score: textSimilarity(desc, i.description) }))
+      .filter(x => x.score >= SIMILAR_ISSUE_THRESHOLD)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5)
+  })()
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -373,6 +388,20 @@ export default function ReceivedIssues() {
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>รายละเอียดปัญหา *</label>
                 <textarea value={form.description} onChange={set('description')} rows={3} placeholder="อธิบายปัญหาที่พบ..."
                   style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }} />
+                {similarIssues.length > 0 && (
+                  <div style={{ marginTop: 8, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
+                      ⚠️ อาจเป็นเรื่องเดิม — พบปัญหาคล้ายกัน {similarIssues.length} รายการ (ทุก รพ.)
+                    </div>
+                    {similarIssues.map(({ issue, score }) => (
+                      <div key={issue.id} style={{ fontSize: 12, color: '#374151', padding: '5px 0', borderTop: '1px dashed #fde68a' }}>
+                        <span style={{ fontWeight: 600 }}>🏥 {getHospName(issue.hospitalId)}</span>
+                        <span style={{ color: '#94a3b8' }}> · {formatDate(issue.reportDate)} · คล้าย {Math.round(score * 100)}%</span>
+                        <div style={{ color: '#64748b', marginTop: 2 }}>{issue.description}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div style={{ marginBottom: 20 }}>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>วิธีแก้ไข / ผลการดำเนินการ</label>
