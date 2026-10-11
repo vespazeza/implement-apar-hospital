@@ -58,10 +58,13 @@ const exportOverviewExcel = (rows) => {
   XLSX.writeFile(wb, `usage_overview_${new Date().toISOString().slice(0, 10)}.xlsx`)
 }
 
+const currentBEYear = String(new Date().getFullYear() + 543)
+
 export default function UsageOverview() {
   const navigate = useNavigate()
   const [rows, setRows] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [filterYear, setFilterYear] = useState(currentBEYear)
   const [filterRegion, setFilterRegion] = useState('')
   const [filterProvince, setFilterProvince] = useState('')
   const [search, setSearch] = useState('')
@@ -77,16 +80,18 @@ export default function UsageOverview() {
 
   const regions = useMemo(() => [...new Set((rows || []).map(r => r.healthRegion).filter(Boolean))].sort(), [rows])
   const provinces = useMemo(() => [...new Set((rows || []).map(r => r.province).filter(Boolean))].sort(), [rows])
+  const years = useMemo(() => [...new Set((rows || []).map(r => String(Number(r.ym.slice(0, 4)) + 543)))].sort().reverse(), [rows])
   const globalLatestYm = useMemo(() => (rows && rows.length ? rows.reduce((m, r) => r.ym > m ? r.ym : m, '000000') : ''), [rows])
 
   const filtered = useMemo(() => {
     if (!rows) return []
     return rows.filter(r =>
+      (!filterYear || String(Number(r.ym.slice(0, 4)) + 543) === filterYear) &&
       (!filterRegion || r.healthRegion === filterRegion) &&
       (!filterProvince || r.province === filterProvince) &&
       (!search.trim() || r.hospitalName.toLowerCase().includes(search.trim().toLowerCase()))
     )
-  }, [rows, filterRegion, filterProvince, search])
+  }, [rows, filterYear, filterRegion, filterProvince, search])
 
   const sorted = useMemo(() => {
     const arr = [...filtered]
@@ -173,6 +178,10 @@ export default function UsageOverview() {
       <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหาชื่อ รพ..."
           style={{ padding: '8px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 13, minWidth: 200 }} />
+        <select value={filterYear} onChange={e => setFilterYear(e.target.value)} style={{ padding: '8px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 13 }}>
+          <option value="">ทุกปี พ.ศ.</option>
+          {years.map(y => <option key={y} value={y}>ปี {y}</option>)}
+        </select>
         <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)} style={{ padding: '8px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 13 }}>
           <option value="">ทุกเขตสุขภาพ</option>
           {regions.map(r => <option key={r} value={r}>{r}</option>)}
@@ -181,8 +190,8 @@ export default function UsageOverview() {
           <option value="">ทุกจังหวัด</option>
           {provinces.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
-        {(filterRegion || filterProvince || search) && (
-          <button onClick={() => { setFilterRegion(''); setFilterProvince(''); setSearch('') }}
+        {(filterYear !== currentBEYear || filterRegion || filterProvince || search) && (
+          <button onClick={() => { setFilterYear(currentBEYear); setFilterRegion(''); setFilterProvince(''); setSearch('') }}
             style={{ padding: '8px 14px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 13, cursor: 'pointer', color: '#64748b' }}>✕ ล้างตัวกรอง</button>
         )}
         <button onClick={() => exportOverviewExcel(sorted)} disabled={sorted.length === 0} style={{
@@ -241,6 +250,7 @@ export default function UsageOverview() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
+                <th style={th}>ลำดับ</th>
                 <th style={th} onClick={() => toggleSort('hospitalName')}>โรงพยาบาล</th>
                 <th style={th} onClick={() => toggleSort('usageScore')}>Usage Score</th>
                 <th style={th}>แนวโน้ม 6 เดือน</th>
@@ -253,11 +263,12 @@ export default function UsageOverview() {
               </tr>
             </thead>
             <tbody>
-              {sorted.map(r => {
+              {sorted.map((r, i) => {
                 const lc = levelColor(r.usageScore)
                 const stale = r.ym !== globalLatestYm
                 return (
                   <tr key={r.hospitalId}>
+                    <td style={{ ...td, color: '#64748b', fontWeight: 600 }}>{i + 1}</td>
                     <td style={{ ...td, fontWeight: 600 }}>🏥 {r.hospitalName}</td>
                     <td style={td}>
                       <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, background: lc.bg, color: lc.color, border: `1px solid ${lc.border}` }}>
@@ -270,9 +281,9 @@ export default function UsageOverview() {
                       )}
                     </td>
                     <td style={td}><Sparkline data={r.sparkline} /></td>
-                    <td style={td} title={r.businessDaysFrom ? `นับวันทำการจาก ${fmtDate(r.businessDaysFrom)} (วันเริ่มโครงการ)` : undefined}>
+                    <td style={td} title={r.projectStartDate ? `วันเริ่มโครงการ ${fmtDate(r.projectStartDate)}` : undefined}>
                       {r.businessDayRate.toFixed(0)}%
-                      {r.businessDaysFrom && <div style={{ fontSize: 10, color: '#cbd5e1' }}>จาก {fmtDate(r.businessDaysFrom)}</div>}
+                      {r.projectStartDate && <div style={{ fontSize: 10, color: '#cbd5e1' }}>จาก {fmtDate(r.projectStartDate)}</div>}
                     </td>
                     <td style={{ ...td, color: r.hospitalStaffRate < 40 ? '#dc2626' : '#1e293b', fontWeight: r.hospitalStaffRate < 40 ? 700 : 400 }}>{r.hospitalStaffRate.toFixed(1)}%</td>
                     <td style={td}><SystemDots n={r.systemCoverage} /></td>
@@ -302,14 +313,16 @@ export default function UsageOverview() {
           <table style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <th style={{ ...th, position: 'sticky', left: 0, background: '#f1f5f9' }}>โรงพยาบาล</th>
+                <th style={{ ...th, position: 'sticky', left: 0, background: '#f1f5f9' }}>ลำดับ</th>
+                <th style={{ ...th, position: 'sticky', left: 44, background: '#f1f5f9' }}>โรงพยาบาล</th>
                 {allMonths.map(m => <th key={m} style={{ ...th, textAlign: 'center' }}>{ymLabel(m)}</th>)}
               </tr>
             </thead>
             <tbody>
-              {sorted.map(r => (
+              {sorted.map((r, i) => (
                 <tr key={r.hospitalId}>
-                  <td style={{ ...td, position: 'sticky', left: 0, background: '#fff', fontWeight: 600 }}>{r.hospitalName}</td>
+                  <td style={{ ...td, position: 'sticky', left: 0, background: '#fff', color: '#64748b', fontWeight: 600 }}>{i + 1}</td>
+                  <td style={{ ...td, position: 'sticky', left: 44, background: '#fff', fontWeight: 600 }}>{r.hospitalName}</td>
                   {allMonths.map(m => {
                     const score = heatmapScoreOf(r, m)
                     const lc = score != null ? levelColor(score) : null

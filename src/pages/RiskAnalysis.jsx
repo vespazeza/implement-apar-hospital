@@ -1,11 +1,24 @@
 import { useState, useRef } from 'react'
 import { useApp } from '../context/AppContext'
 import SearchableSelect from '../components/SearchableSelect'
+import { textSimilarity } from '../utils/textSimilarity'
 
 // ─── Risk config ─────────────────────────────────────────────────────────────
 
 const SEVERITY_SCORE = { high: 3, medium: 2, low: 1 }
-const STATUS_WEIGHT  = { open: 1, inprogress: 0.6, closed: 0 }
+const STATUS_WEIGHT  = { open: 1, inprogress: 0.6, testing: 0.3, closed: 0 }
+const DUPLICATE_THRESHOLD = 0.35
+
+// "รับแจ้งปัญหา" ใช้ priority (low/medium/high/critical) แทน severity (low/medium/high) — ต้องแปลงก่อนรวมคะแนนความเสี่ยง
+const PRIORITY_TO_SEVERITY = { low: 'low', medium: 'medium', high: 'high', critical: 'high' }
+
+// สถานะของ "รับแจ้งปัญหา" (ต่างชุดกับ trainingIssues/systemIssues ที่มีแค่ open/inprogress/closed)
+const STATUS_OPT_RISK = [
+  { value: 'open', label: 'รอแก้ไข', color: '#dc2626', bg: '#fef2f2' },
+  { value: 'inprogress', label: 'กำลังแก้ไข', color: '#d97706', bg: '#fffbeb' },
+  { value: 'testing', label: 'ทดสอบ', color: '#0891b2', bg: '#eff6ff' },
+  { value: 'closed', label: 'แก้ไขแล้ว', color: '#16a34a', bg: '#f0fdf4' },
+]
 
 const RISK_LEVEL = [
   { min: 8,  label: 'สูงมาก',      color: '#dc2626', bg: '#fef2f2', border: '#fecaca', icon: '🔴' },
@@ -63,6 +76,36 @@ const calcScore = (issues) =>
 const formatDate = () => {
   const d = new Date()
   return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear() + 543}`
+}
+
+const fmtDateShort = (d) => {
+  if (!d) return '-'
+  const s = String(d).slice(0, 10)
+  if (!s.includes('-')) return '-'
+  const [y, m, day] = s.split('-')
+  return `${day}/${m}/${Number(y) + 543}`
+}
+
+// จับกลุ่มปัญหาที่แจ้งซ้ำ — ระบบงานเดียวกัน + รายละเอียดคล้ายกันเกิน threshold (เทียบเกณฑ์เดียวกับหน้ารับแจ้งปัญหา)
+const buildDuplicateClusters = (issues) => {
+  const pool = issues.filter(i => (i.description || '').trim().length >= 5)
+  const used = new Set()
+  const clusters = []
+  for (let i = 0; i < pool.length; i++) {
+    if (used.has(pool[i].id)) continue
+    const group = [pool[i]]
+    used.add(pool[i].id)
+    for (let j = i + 1; j < pool.length; j++) {
+      if (used.has(pool[j].id)) continue
+      if (pool[j].systemName !== pool[i].systemName) continue
+      if (textSimilarity(pool[i].description, pool[j].description) >= DUPLICATE_THRESHOLD) {
+        group.push(pool[j])
+        used.add(pool[j].id)
+      }
+    }
+    if (group.length >= 2) clusters.push(group)
+  }
+  return clusters.sort((a, b) => b.length - a.length)
 }
 
 // ─── Donut chart helpers ──────────────────────────────────────────────────────
@@ -211,7 +254,7 @@ function CategoryDonut({ issues }) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function RiskAnalysis() {
-  const { hospitals, trainingIssues, systemIssues } = useApp()
+  const { hospitals, trainingIssues, systemIssues, receivedIssues } = useApp()
   const [activeTab, setActiveTab] = useState('overview')
   const printRef = useRef()
 
@@ -228,6 +271,7 @@ export default function RiskAnalysis() {
   const allIssues = [
     ...trainingIssues.map(i => ({ ...i, source: 'training' })),
     ...systemIssues.map(i => ({ ...i, source: 'system' })),
+    ...receivedIssues.map(i => ({ ...i, source: 'received', severity: PRIORITY_TO_SEVERITY[i.priority] || 'medium' })),
   ]
 
   const getHospName = (id) => hospitals.find(h => String(h.id) === String(id))?.name || `รพ. ${id}`
@@ -306,6 +350,9 @@ export default function RiskAnalysis() {
     ? hospTabHospRisks.filter(h => String(h.hosp.id) === filterHosp)
     : hospTabHospRisks
 
+  // ปัญหาที่แจ้งซ้ำ (จากข้อมูล "รับแจ้งปัญหา")
+  const duplicateClusters = buildDuplicateClusters(receivedIssues || [])
+
 
   const handlePrint = () => {
     const content = printRef.current.innerHTML
@@ -337,6 +384,7 @@ export default function RiskAnalysis() {
     { key: 'overview',  label: '📊 ภาพรวมความเสี่ยง' },
     { key: 'hospital',  label: '🏥 วิเคราะห์ตาม รพ.' },
     { key: 'category',  label: '🗂️ วิเคราะห์ตามประเภท' },
+    { key: 'duplicate', label: `🔁 ปัญหาแจ้งซ้ำ${duplicateClusters.length ? ` (${duplicateClusters.length})` : ''}` },
     { key: 'report',    label: '📑 รายงานผู้บริหาร' },
   ]
 
@@ -614,6 +662,70 @@ export default function RiskAnalysis() {
                       ))}
                     </div>
                   </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ── Tab: Duplicate ── */}
+      {activeTab === 'duplicate' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <p style={{ color: '#64748b', fontSize: 13 }}>
+            จับกลุ่มปัญหาที่ถูกแจ้งซ้ำจากข้อมูล "รับแจ้งปัญหา" ({(receivedIssues || []).length} รายการทั้งหมด) — กลุ่มเดียวกันคือระบบงานเดียวกัน และรายละเอียดปัญหาคล้ายกันตั้งแต่ {Math.round(DUPLICATE_THRESHOLD * 100)}% ขึ้นไป
+          </p>
+          {duplicateClusters.length === 0 ? (
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 60, textAlign: 'center', color: '#94a3b8' }}>
+              <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
+              <div style={{ fontSize: 16, fontWeight: 600 }}>ยังไม่พบปัญหาที่แจ้งซ้ำ</div>
+            </div>
+          ) : duplicateClusters.map((group, idx) => {
+            const hospIds = [...new Set(group.map(i => i.hospitalId))]
+            const openCount = group.filter(i => i.status !== 'closed').length
+            const rl = group.length >= 5 ? RISK_LEVEL[0] : group.length >= 3 ? RISK_LEVEL[1] : RISK_LEVEL[2]
+            const sorted = [...group].sort((a, b) => (a.reportDate || '').localeCompare(b.reportDate || ''))
+            return (
+              <div key={idx} style={{ background: '#fff', borderRadius: 12, border: `1.5px solid ${rl.border}`, overflow: 'hidden' }}>
+                <div style={{ background: rl.bg, padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 220 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: '#1e293b' }}>⚙️ {sorted[0].systemName || 'ไม่ระบุระบบงาน'}</div>
+                    <div style={{ fontSize: 13, color: '#374151', marginTop: 4 }}>{sorted[0].description}</div>
+                  </div>
+                  <span style={{ padding: '3px 12px', borderRadius: 20, fontSize: 12, fontWeight: 700, background: rl.color, color: '#fff', whiteSpace: 'nowrap' }}>
+                    {rl.icon} แจ้งซ้ำ {group.length} ครั้ง
+                  </span>
+                </div>
+                <div style={{ padding: '14px 20px' }}>
+                  <div style={{ display: 'flex', gap: 20, marginBottom: 12, fontSize: 12, color: '#64748b', flexWrap: 'wrap' }}>
+                    <span>🏥 {hospIds.length} รพ.</span>
+                    <span>🔓 ค้างแก้ {openCount} รายการ</span>
+                    <span>📅 {fmtDateShort(sorted[0].reportDate)} — {fmtDateShort(sorted[sorted.length - 1].reportDate)}</span>
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc' }}>
+                        {['วันที่แจ้ง', 'โรงพยาบาล', 'รายละเอียด', 'สถานะ'].map(h => (
+                          <th key={h} style={{ padding: '6px 10px', textAlign: 'left', color: '#64748b', fontWeight: 700, borderBottom: '1px solid #e2e8f0' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sorted.map(i => {
+                        const sts = STATUS_OPT_RISK.find(s => s.value === i.status) || STATUS_OPT_RISK[0]
+                        return (
+                          <tr key={i.id}>
+                            <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', color: '#64748b', whiteSpace: 'nowrap' }}>{fmtDateShort(i.reportDate)}</td>
+                            <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', fontWeight: 600 }}>{getHospName(i.hospitalId)}</td>
+                            <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', color: '#374151' }}>{i.description}</td>
+                            <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                              <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: sts.bg, color: sts.color }}>{sts.label}</span>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )

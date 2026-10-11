@@ -57,17 +57,19 @@ export default function UsageSubmissionTracking() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={{ ...th, textAlign: 'left', position: 'sticky', left: 0, background: '#f1f5f9' }}>โรงพยาบาล</th>
+                  <th style={{ ...th, position: 'sticky', left: 0, background: '#f1f5f9' }}>ลำดับ</th>
+                  <th style={{ ...th, textAlign: 'left', position: 'sticky', left: 44, background: '#f1f5f9' }}>โรงพยาบาล</th>
                   {data.months.map(ym => <th key={ym} style={th}>{ymLabel(ym)}</th>)}
                   <th style={th}></th>
                 </tr>
               </thead>
               <tbody>
-                {data.hospitals.map(h => {
+                {data.hospitals.map((h, i) => {
                   const sentCount = h.months.filter(m => m.sent).length
                   return (
                     <tr key={h.hospitalId}>
-                      <td style={{ ...td, textAlign: 'left', fontWeight: 600, position: 'sticky', left: 0, background: '#fff' }}>
+                      <td style={{ ...td, position: 'sticky', left: 0, background: '#fff', color: '#64748b', fontWeight: 600 }}>{i + 1}</td>
+                      <td style={{ ...td, textAlign: 'left', fontWeight: 600, position: 'sticky', left: 44, background: '#fff' }}>
                         🏥 {h.hospitalName}
                         {sentCount === 0 && <span style={{ marginLeft: 6, fontSize: 10, color: '#dc2626' }}>⚠ ไม่เคยส่ง</span>}
                       </td>

@@ -1,9 +1,11 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useApp } from '../context/AppContext'
 import DateInput from '../components/DateInput'
 import * as XLSX from 'xlsx'
 
 const API = import.meta.env.VITE_API_URL || ''
+const fmtDateShort = (d) => { if (!d) return '-'; const s = String(d).slice(0, 10); const [y, m, day] = s.split('-'); return `${day}/${m}/${Number(y) + 543}` }
+const fmtDateTimeShort = (d) => { if (!d) return '-'; const s = String(d).replace('T', ' ').slice(0, 16); const [date, time] = s.split(' '); return `${fmtDateShort(date)} ${time || ''}` }
 
 // ลำดับตรวจก่อนหลังสำคัญ — ของเฉพาะเจาะจงกว่าต้องมาก่อน (USER_ACTIVITY ก่อน USERS)
 const REPORT_TYPES = [
@@ -43,6 +45,32 @@ export default function UsageImport() {
 
   const resolvedHospital = selectedHosp ? hospitals.find(h => String(h.code) === String(selectedHosp.hospcode)) : null
 
+  // ── ประวัติการนำเข้าของ รพ. ที่เลือก ──────────────────────────────────────────────
+  const [batches, setBatches] = useState([])
+  const [batchesLoading, setBatchesLoading] = useState(false)
+  const [deletingId, setDeletingId] = useState(null)
+
+  const loadBatches = useCallback(() => {
+    if (!resolvedHospital) { setBatches([]); return }
+    setBatchesLoading(true)
+    fetch(`${API}/api/usage/batches/${resolvedHospital.id}`).then(r => r.json())
+      .then(d => { setBatches(Array.isArray(d) ? d : []); setBatchesLoading(false) })
+      .catch(() => setBatchesLoading(false))
+  }, [resolvedHospital])
+  useEffect(() => { loadBatches() }, [loadBatches])
+
+  const handleDeleteBatch = async (batch) => {
+    const label = `${fmtDateShort(batch.period_start)} – ${fmtDateShort(batch.period_end)}`
+    if (!window.confirm(`ยืนยันลบข้อมูลที่นำเข้าไว้ของรอบ ${label}?\nข้อมูลทุกรายงานในรอบนี้จะถูกลบทั้งหมด และกู้คืนไม่ได้`)) return
+    setDeletingId(batch.id)
+    try {
+      await fetch(`${API}/api/usage/batch/${batch.id}`, { method: 'DELETE' })
+      loadBatches()
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   const searchHospcode = (q) => {
     setQuery(q)
     clearTimeout(searchTimer.current)
@@ -73,7 +101,10 @@ export default function UsageImport() {
         const sheetName = wb.SheetNames[0]
         const raw = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' })
         const headerKeys = rt?.singleHeader ? rt.fields : (raw[1] || []).map(k => String(k).trim())
-        const dataRows = (rt?.singleHeader ? raw.slice(1) : raw.slice(2)).filter(r => r.some(c => c !== ''))
+        // เอ็นจิน report นี้เวลาไม่มีข้อมูลตามเงื่อนไข จะใส่แถว "ไม่พบข้อมูล" แทนการไม่มีแถวเลย ต้องกรองทิ้ง
+        // ไม่งั้นจะถูกนำเข้าเป็นข้อมูลขยะ (เช่น username="ไม่พบข้อมูล") หรือ error ถ้าคอลัมน์นั้นเป็นตัวเลขที่ต้องมีค่า
+        const dataRows = (rt?.singleHeader ? raw.slice(1) : raw.slice(2))
+          .filter(r => r.some(c => c !== '') && String(r[0]).trim() !== 'ไม่พบข้อมูล')
         const rows = dataRows.map(r => {
           const obj = {}
           headerKeys.forEach((k, i) => { obj[k] = r[i] })
@@ -144,6 +175,7 @@ export default function UsageImport() {
       }
       const data = await res.json()
       setResults(data.results || [{ code: '-', ok: false, message: data.error || 'นำเข้าไม่สำเร็จ' }])
+      loadBatches()
     } catch {
       setResults([{ code: '-', ok: false, message: 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ — ตรวจสอบว่า backend กำลังทำงานอยู่' }])
     } finally {
@@ -230,6 +262,39 @@ export default function UsageImport() {
             </div>
           </div>
         </section>
+
+        {resolvedHospital && (
+          <section style={card}>
+            <h2 style={h2}><span>🗂️</span> ประวัติการนำเข้าของ {resolvedHospital.name}</h2>
+            {batchesLoading ? (
+              <div style={{ fontSize: 13, color: '#94a3b8' }}>กำลังโหลด...</div>
+            ) : batches.length === 0 ? (
+              <div style={{ fontSize: 13, color: '#94a3b8' }}>ยังไม่เคยนำเข้าข้อมูลของโรงพยาบาลนี้</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {batches.map(b => (
+                  <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 13px', borderRadius: 9, border: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>
+                        รอบ {fmtDateShort(b.period_start)} – {fmtDateShort(b.period_end)}
+                        {b.usage_score != null && (
+                          <span style={{ marginLeft: 8, padding: '1px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: '#eff6ff', color: '#0891b2' }}>
+                            คะแนน {Number(b.usage_score).toFixed(1)}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#94a3b8' }}>นำเข้าเมื่อ {fmtDateTimeShort(b.imported_at)}{b.imported_by ? ` โดย ${b.imported_by}` : ''}</div>
+                    </div>
+                    <button onClick={() => handleDeleteBatch(b)} disabled={deletingId === b.id} style={{
+                      padding: '5px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6,
+                      fontSize: 12, cursor: deletingId === b.id ? 'default' : 'pointer', color: '#dc2626', flexShrink: 0,
+                    }}>{deletingId === b.id ? 'กำลังลบ...' : '🗑️ ลบ'}</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
 
         <section style={card}>
           <h2 style={h2}><span>2️⃣</span> แนบไฟล์รายงาน (เลือกได้หลายไฟล์พร้อมกัน)</h2>

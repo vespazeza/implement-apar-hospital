@@ -233,10 +233,15 @@ export default function UsageHospitalDetail() {
     return out
   }, [detail])
 
-  const inactiveUsers = useMemo(() => (detail?.users || []).filter(u => {
+  const visibleUsers = useMemo(() => (detail?.users || []).filter(u => {
+    const name = `${u.username || ''} ${u.fullName || ''}`.toLowerCase()
+    return !name.includes('bms')
+  }), [detail])
+
+  const inactiveUsers = useMemo(() => visibleUsers.filter(u => {
     if (!u.lastLogin) return true
     return (new Date() - new Date(u.lastLogin)) / 86400000 > 30
-  }), [detail])
+  }), [visibleUsers])
 
   const journalByYm = useMemo(() => {
     if (!detail) return []
@@ -374,25 +379,19 @@ export default function UsageHospitalDetail() {
                   </Section>
                 </div>
 
-                <Section icon="👥" title={`ตารางรายผู้ใช้ (${detail.users.length} คน)`}>
+                <Section icon="👥" title={`ตารางรายผู้ใช้ (${visibleUsers.length} คน)`}>
                   <div style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                      <thead><tr>{['ชื่อ', 'ตำแหน่ง', 'เข้าระบบ', 'การกระทำ', 'วันที่ใช้งาน', 'งานหลัก', 'ใช้งานล่าสุด'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                      <thead><tr>{['ชื่อ', 'ตำแหน่ง', 'การกระทำ', 'วันที่ใช้งาน', 'งานหลัก', 'ใช้งานล่าสุด'].map(h => <th key={h} style={['การกระทำ', 'วันที่ใช้งาน'].includes(h) ? { ...th, textAlign: 'right' } : th}>{h}</th>)}</tr></thead>
                       <tbody>
-                        {detail.users.map(u => {
+                        {visibleUsers.map(u => {
                           const mainAction = Object.entries({ add: u.nAdd, edit: u.nEdit, delete: u.nDelete, import: u.nImport, export: u.nExport, post: u.nPost }).sort((a, b) => b[1] - a[1])[0]
                           return (
                             <tr key={u.username}>
                               <td style={{ ...td, fontWeight: 600 }}>{u.fullName || u.username}</td>
-                              <td style={td}>
-                                {u.position}
-                                <span style={{ marginLeft: 6, padding: '1px 7px', borderRadius: 10, fontSize: 10, fontWeight: 700, background: u.role === 'hospital_staff' ? '#f0fdf4' : '#eff6ff', color: u.role === 'hospital_staff' ? '#16a34a' : '#0891b2' }}>
-                                  {u.role === 'hospital_staff' ? 'เจ้าหน้าที่ รพ.' : 'ผู้ติดตั้ง/IT'}
-                                </span>
-                              </td>
+                              <td style={td}>{u.position}</td>
+                              <td style={{ ...td, textAlign: 'right' }}>{u.nActions}</td>
                               <td style={{ ...td, textAlign: 'right' }}>{u.activeDays} วัน</td>
-                              <td style={{ ...td, textAlign: 'right' }}>{u.nActions}{u.nFailed > 0 && <span style={{ color: '#dc2626' }}> ({u.nFailed} ล้มเหลว)</span>}</td>
-                              <td style={{ ...td, textAlign: 'right' }}>{u.activeDays}</td>
                               <td style={td}>{mainAction && mainAction[1] > 0 ? ACTION_LABELS[mainAction[0]] : '-'}</td>
                               <td style={td}>{fmtDateTime(u.lastAt)}</td>
                             </tr>

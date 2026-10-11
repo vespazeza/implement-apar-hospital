@@ -3,7 +3,7 @@ const mysql = require('mysql2/promise')
 const cors = require('cors')
 const path = require('path')
 const fs = require('fs')
-const { computeUsageScore, monthsInPeriod } = require('./usageKpi')
+const { computeUsageScore } = require('./usageKpi')
 
 const app = express()
 app.use(cors())
@@ -2223,6 +2223,36 @@ app.post('/api/usage-import', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// ประวัติการนำเข้า Usage ของ รพ. หนึ่ง (เรียงล่าสุดก่อน)
+app.get('/api/usage/batches/:hospitalId', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT b.id, b.period_start, b.period_end, b.file_name, b.imported_by, b.imported_at, s.ym, s.usage_score
+       FROM usage_import_batch b
+       LEFT JOIN usage_score_monthly s ON s.import_batch_id = b.id
+       WHERE b.hospital_id=? AND b.deleted_at IS NULL
+       ORDER BY b.period_end DESC, b.id DESC`,
+      [req.params.hospitalId]
+    )
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ลบการนำเข้า Usage ทั้ง batch (ทุกรายงานที่ผูกกับ batch นี้ + journal_monthly ที่ batch นี้เป็นเจ้าของล่าสุด)
+app.delete('/api/usage/batch/:batchId', async (req, res) => {
+  const { batchId } = req.params
+  try {
+    const allTables = [...new Set(Object.values(USAGE_REPORTS).map(d => d.table))]
+    for (const table of allTables) {
+      await pool.query(`DELETE FROM ${table} WHERE import_batch_id=?`, [batchId])
+    }
+    await pool.query('DELETE FROM usage_fact_journal_monthly WHERE import_batch_id=?', [batchId])
+    await pool.query('DELETE FROM usage_score_monthly WHERE import_batch_id=?', [batchId])
+    await pool.query('DELETE FROM usage_import_batch WHERE id=?', [batchId])
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // ─── Usage dashboard (login/user activity ของ BMS-Accounting) ─────────────────
 // ภาพรวมทุก รพ. — เอารอบล่าสุดของแต่ละ รพ. จาก usage_score_monthly + sparkline ย้อนหลัง 6 รอบ
 app.get('/api/usage/overview', async (req, res) => {
@@ -2231,6 +2261,9 @@ app.get('/api/usage/overview', async (req, res) => {
     const [hosps] = await pool.query('SELECT id, name, province, health_region FROM hospitals')
     const hospMap = {}
     hosps.forEach(h => { hospMap[h.id] = h })
+    const [planRows] = await pool.query('SELECT hospital_id, MIN(start_date) as start_date FROM project_plans WHERE start_date IS NOT NULL GROUP BY hospital_id')
+    const projectStartMap = {}
+    planRows.forEach(p => { projectStartMap[p.hospital_id] = p.start_date })
 
     const byHosp = {}
     rows.forEach(r => { (byHosp[r.hospital_id] ||= []).push(r) })
@@ -2245,7 +2278,7 @@ app.get('/api/usage/overview', async (req, res) => {
         province: h.province || '', healthRegion: h.health_region || '',
         ym: latest.ym,
         usageScore: Number(latest.usage_score), usageLevel: latest.usage_level,
-        businessDayRate: Number(latest.business_day_rate), businessDaysFrom: latest.business_days_from, hospitalStaffRate: Number(latest.hospital_staff_rate),
+        businessDayRate: Number(latest.business_day_rate), businessDaysFrom: latest.business_days_from, projectStartDate: projectStartMap[hospitalId] || null, hospitalStaffRate: Number(latest.hospital_staff_rate),
         systemCoverage: latest.system_coverage, journalEntries: latest.journal_entries,
         activeUserRate: Number(latest.active_user_rate), nUsersLogin: latest.n_users_login, nActionsTotal: latest.n_actions_total,
         loginFailedCount: latest.login_failed_count, successRate: Number(latest.success_rate),
@@ -2286,10 +2319,9 @@ app.get('/api/usage/hospital/:hospitalId', async (req, res) => {
     const [userActivity] = await pool.query('SELECT * FROM usage_fact_user_activity WHERE import_batch_id=? ORDER BY n_actions DESC', [batchId])
     const [snapUsers] = await pool.query('SELECT * FROM usage_snapshot_user WHERE import_batch_id=?', [batchId])
     const [hourly] = await pool.query('SELECT iso_dow, hour, n_actions FROM usage_fact_hourly WHERE import_batch_id=?', [batchId])
-    const months = monthsInPeriod(score.period_start, score.period_end)
     const [journal] = await pool.query(
-      `SELECT ym, source_type, posted_flag, n_entries FROM usage_fact_journal_monthly WHERE hospital_id=? AND ym IN (${months.map(() => '?').join(',') || 'NULL'}) ORDER BY ym`,
-      [hospitalId, ...months]
+      'SELECT ym, source_type, posted_flag, n_entries FROM usage_fact_journal_monthly WHERE hospital_id=? ORDER BY ym',
+      [hospitalId]
     )
     const [failures] = await pool.query('SELECT * FROM usage_fact_failure WHERE import_batch_id=? ORDER BY activity_date DESC LIMIT 200', [batchId])
     const [logins] = await pool.query('SELECT * FROM usage_fact_login WHERE import_batch_id=? ORDER BY occurred_at DESC LIMIT 300', [batchId])
