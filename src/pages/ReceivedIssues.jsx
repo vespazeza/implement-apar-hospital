@@ -181,11 +181,12 @@ export default function ReceivedIssues() {
       return `${parseInt(day)} ${THAI_MONTHS[parseInt(m)-1]} ${parseInt(y)+543}`
     }
     const title = 'ตารางรับแจ้งปัญหา AP/AR'
-    const headers = ['ลำดับ','วันที่รับปัญหา','หน่วยงาน','ปัญหา','กลุ่มปัญหา','สถานะ','วิธีการแก้ไข','ผู้แจ้งปัญหา','ผู้รับปัญหา','ผู้แก้ไข','วันที่แก้ไขปัญหา']
+    const headers = ['ลำดับ','วันที่รับปัญหา','หน่วยงาน','ระบบงาน','ปัญหา','กลุ่มปัญหา','สถานะ','วิธีการแก้ไข','ผู้แจ้งปัญหา','ผู้รับปัญหา','ผู้แก้ไข','วันที่แก้ไขปัญหา']
     const rows = filtered.map((issue, idx) => [
       idx + 1,
       fmtBE(issue.reportDate),
       getHospName(issue.hospitalId),
+      issue.systemName || '',
       issue.description || '',
       issue.category || '',
       STATUS_OPT.find(s => s.value === issue.status)?.label || issue.status || '',
@@ -198,7 +199,7 @@ export default function ReceivedIssues() {
     const wsData = [[title], [], headers, ...rows]
     const ws = XLSX.utils.aoa_to_sheet(wsData)
     ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }]
-    ws['!cols'] = [{ wch: 6 }, { wch: 16 }, { wch: 24 }, { wch: 50 }, { wch: 16 }, { wch: 14 }, { wch: 40 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 16 }]
+    ws['!cols'] = [{ wch: 6 }, { wch: 16 }, { wch: 24 }, { wch: 18 }, { wch: 50 }, { wch: 16 }, { wch: 14 }, { wch: 40 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 16 }]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'รับแจ้งปัญหา')
     XLSX.writeFile(wb, `received_issues_${new Date().toISOString().slice(0,10)}.xlsx`)

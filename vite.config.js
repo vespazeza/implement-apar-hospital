@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': `http://localhost:${process.env.BACKEND_PORT || 3001}`
-    }
+    },
+    allowedHosts: ['.loca.lt', '.trycloudflare.com']
   }
 })
